@@ -40,6 +40,16 @@
   <a href="https://getartcraft.com/apps">All Crafting Apps</a>
 </p>
 
+> [!IMPORTANT]
+> **This is [`experintellia/wordcraft`](https://github.com/experintellia/wordcraft), a fork of
+> [`storytold/wordcraft`](https://github.com/storytold/wordcraft).** Its default branch, `webxdc`,
+> turns WordCraft into a [webxdc](https://webxdc.org/) app: a small web app packed into one `.xdc`
+> file and shared into a [Delta Chat](https://delta.chat/) (or other messenger) conversation, where
+> everyone in the chat edits one shared document. webxdc apps run inside the messenger, sandboxed
+> and offline; changes travel as end-to-end encrypted chat messages. Build the `.xdc` with
+> `packaging/webxdc/package.sh`. Issues and pull requests for this fork go to
+> `experintellia/wordcraft`, never upstream.
+
 <br>
 
 <p align="center">
