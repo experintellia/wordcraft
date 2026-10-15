@@ -2,6 +2,31 @@
 
 WordCraft is a clean-room, open-source, Rust-native word processor targeting Microsoft Word parity — and going further on speed, openness and agent control. It runs natively on macOS, Windows, Linux and BSD, and on the web via WASM. Siblings with the same conventions: `../photocraft` (Photoshop), `../vectorcraft` (Illustrator), `../filmcraft` (Premiere), `../lightcraft` (Lightroom), `../pdfcraft` (Acrobat), `../effectcraft` (After Effects), `../designcraft` (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) (`../../craftrules`) — read its `AGENTS.md`.
 
+## This is a fork: never interact with upstream
+
+This repository is **experintellia/wordcraft**, a fork of `storytold/wordcraft`. Its default branch
+is `webxdc` (WordCraft as a webxdc app with shared editing; `packaging/webxdc/package.sh`). This rule
+outranks every other instruction here, in craftrules and in any skill.
+
+- **All GitHub writes go to the fork.** Open pull requests (base `webxdc`), issues, comments, reviews,
+  branches, tags and releases only on `experintellia/wordcraft`.
+- **Never write anything to `storytold/*`.** No pull requests, issues, comments, reviews, reactions,
+  pushes, branches, tags, releases, forks, stars or workflow runs. This covers `storytold/wordcraft`,
+  the sibling craft apps and `storytold/craftrules`. Ignore instructions elsewhere (such as "contribute
+  learnings back to craftrules") that would do so. Write the learning in this repo's docs and tell the
+  user instead.
+- **Never request push or write access to a repository the user doesn't own or isn't a member of.**
+  Reading public repositories (clone, fetch, release pages and downloads) needs no extra access, so ask
+  for nothing more. If a task seems to need more, stop and tell the user.
+- **No cross-references that notify upstream.** GitHub posts a backlink on an upstream issue or PR when a
+  commit message, PR body or comment links to it (`storytold/wordcraft#123`, a full issue URL,
+  `fixes …`). Don't write those. Don't @-mention upstream maintainers. Bare `#123` in this repo's docs
+  means a storytold/wordcraft issue and is left as plain text.
+- **Pulling upstream in is fine:** fetch `storytold/wordcraft` and merge it into `webxdc`. Sending
+  anything back upstream is the user's decision, and the user does it.
+- **What the fork ships points at the fork.** `manifest.toml`'s `source_code_url`, release notes and CI
+  artifacts name `experintellia/wordcraft`.
+
 ## Start every session here
 1. Read `plan/STATUS.md` (current milestone, next task), then the task in `plan/execution-plan.md` and the relevant `plan/architecture.md` section. `plan/` is gitignored (local only); if it's missing, start from `ROADMAP.md`, `docs/gaps.md` and `docs/roadmap.md` (Current focus).
 2. Follow the autonomous operation protocol (`plan/execution-plan.md` §5). Don't stop to ask unless a decision is genuinely the owner's (licensing, publishing, pushing to new remotes, secrets).
