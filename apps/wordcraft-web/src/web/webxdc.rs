@@ -10,6 +10,7 @@ use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast as _, JsValue};
 use wordcraft_engine::Session;
 use wordcraft_engine::cmd::insert::base64_encode;
+use wordcraft_ui_egui::async_saves::SaveOutcome;
 use wordcraft_ui_egui::{Inbox, Services};
 
 /// `window.webxdc`, when the page runs as a webxdc app (`webxdc.js` loaded).
@@ -23,6 +24,7 @@ pub fn host(api: &JsValue, session: &mut Session, services: &mut Services, inbox
     if let Some(name) = Reflect::get(api, &"selfName".into()).ok().and_then(|n| n.as_string()).filter(|n| !n.trim().is_empty()) {
         session.author = name;
     }
+    let repaint = ctx.clone();
     let import = api.clone();
     services.open_async = Some(Box::new(move |purpose: &str| {
         let exts = match purpose {
@@ -34,7 +36,7 @@ pub fn host(api: &JsValue, session: &mut Session, services: &mut Services, inbox
         let extensions: Array = exts.iter().map(|e| JsValue::from(format!(".{e}"))).collect();
         let filter = object(&[("extensions", extensions.into()), ("multiple", false.into())]);
         let (inbox, ctx) = (inbox.clone(), ctx.clone());
-        let Ok(promise) = call(&import, "importFiles", &[filter]).and_then(|p| p.dyn_into::<js_sys::Promise>().map_err(JsValue::from)) else {
+        let Ok(promise) = call(&import, "importFiles", &[filter]).and_then(|p| p.dyn_into::<js_sys::Promise>()) else {
             log::error!("webxdc.importFiles is unavailable");
             return;
         };
@@ -53,27 +55,38 @@ pub fn host(api: &JsValue, session: &mut Session, services: &mut Services, inbox
         });
     }));
     let to_chat = api.clone();
+    // The copy counts as saved only once the messenger has taken it (#1315's tickets), so a send
+    // that fails or is cancelled leaves the document unsaved and Replace with File still asks.
+    let saves = services.async_saves.clone();
     services.download = Some(Box::new(move |path: &str, bytes: &[u8]| {
         let name = std::path::Path::new(path).file_name().map_or_else(|| "document.docx".into(), |n| n.to_string_lossy().to_string());
         let file = object(&[("name", name.as_str().into()), ("base64", base64_encode(bytes).into())]);
         let promise = call(&to_chat, "sendToChat", &[object(&[("file", file)])]).map_err(|e| format!("{e:?}"))?;
-        // The messenger may still refuse (too big, cancelled): log it, the document is unchanged.
-        if let Ok(promise) = promise.dyn_into::<js_sys::Promise>() {
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Err(e) = wasm_bindgen_futures::JsFuture::from(promise).await {
+        let Ok(promise) = promise.dyn_into::<js_sys::Promise>() else { return Ok(()) };
+        let ticket = saves.as_ref().map(|s| (s.clone(), s.start()));
+        let repaint = repaint.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let outcome = match wasm_bindgen_futures::JsFuture::from(promise).await {
+                Ok(_) => SaveOutcome::Saved,
+                Err(e) => {
                     log::warn!("couldn't send {name} to the chat: {e:?}");
+                    SaveOutcome::Failed(format!("{e:?}"))
                 }
-            });
-        }
+            };
+            if let Some((saves, ticket)) = ticket {
+                saves.finish(ticket, outcome);
+            }
+            repaint.request_repaint();
+        });
         Ok(())
     }));
-    // Sending to the chat isn't a save the browser finishes later.
-    services.async_saves = None;
     services.print = None;
     services.store_font = None;
     services.forget_font = None;
     services.load_system_fonts = None;
     services.single_document = true;
+    // The chat keeps the document: leaving the app loses nothing a guard could save.
+    services.on_dirty = None;
 }
 
 fn call(this: &JsValue, method: &str, args: &[JsValue]) -> Result<JsValue, JsValue> {
