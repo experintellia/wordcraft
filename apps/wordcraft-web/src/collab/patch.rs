@@ -149,7 +149,7 @@ pub fn diff(a: &Document, b: &Document) -> Patch {
 
 /// `doc` with `patch` applied, if everything it replaces is still as it was; `at` maps a splice's
 /// story and block index into `doc` (positions move when others edited concurrently).
-pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> (StoryRef, usize)) -> Option<Document> {
+pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> Option<(StoryRef, usize)>) -> Option<Document> {
     if patch.b.len() > MAX_SPLICES || patch.b.iter().map(|s| s.v.len()).sum::<usize>() > MAX_BLOCKS {
         return None;
     }
@@ -171,10 +171,10 @@ pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> (Sto
         .b
         .iter()
         .map(|s| {
-            let (st, i) = at(story(s.s), s.at);
-            (st, i, s)
+            let (st, i) = at(story(s.s), s.at)?;
+            Some((st, i, s))
         })
-        .collect();
+        .collect::<Option<_>>()?;
     splices.sort_by_key(|x| std::cmp::Reverse((story_key(x.0), x.1)));
     for (st, i, s) in splices {
         let blocks = out.story_mut(st).ok()?;
@@ -210,8 +210,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
-    fn same_place(s: StoryRef, i: usize) -> (StoryRef, usize) {
-        (s, i)
+    fn same_place(s: StoryRef, i: usize) -> Option<(StoryRef, usize)> {
+        Some((s, i))
     }
 
     #[test]

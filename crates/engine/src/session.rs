@@ -614,6 +614,22 @@ impl Session {
     }
 
     pub fn new(doc: Document) -> Self {
+        Self::with_registry(doc, Arc::new(crate::cmd::registry()))
+    }
+
+    /// Start over on `doc` as a new session would (selection, view, clipboard, history, caches of
+    /// what the user did…), keeping only the command registry and the paragraph layout cache,
+    /// which depend on nothing but content. Shared editing replays each op on a renewed session,
+    /// so nothing one op left behind changes what the next one does.
+    pub fn renew(&mut self, doc: Document) {
+        let cache = std::mem::take(&mut self.cache);
+        *self = Session::with_registry(doc, self.registry.clone());
+        self.cache = cache;
+    }
+
+    /// A new session on `doc` sharing `registry` (building the registry is the costly part of
+    /// [`Session::new`]).
+    pub fn with_registry(doc: Document, registry: Arc<Registry>) -> Self {
         let start = doc.start_of(StoryRef::Body);
         let bib_style = doc_bib_style(&doc);
         Session {
@@ -633,7 +649,7 @@ impl Session {
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
-            registry: Arc::new(crate::cmd::registry()),
+            registry,
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
@@ -1241,7 +1257,10 @@ impl Session {
         let (sel, pending) = (self.sel.clone(), self.pending.clone());
         let (before, rev) = (top.then(|| self.doc.clone()), self.rev);
         self.run_depth += 1;
-        let result = self.run_inner(id, params);
+        // `run_inner` catches a command's panic; this also covers its own bookkeeping, so the
+        // depth and the clock are always put back.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(id, params)))
+            .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id} panicked"))));
         self.run_depth -= 1;
         // A command that changed the document, marked so or not (opening a file).
         if let (Some(before), Ok(_)) = (before, &result)
