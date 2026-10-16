@@ -1292,10 +1292,20 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::new(("dialog", title));
-    let shown = place_dialog(ctx, id, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false)).open(&mut open).show(ctx, |ui| {
-        ui.set_min_width(340.0);
-        close = body(app, ui, &mut d);
-    });
+    let window = egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false);
+    let shown = if crate::narrow(ctx) {
+        // A phone: no wider or taller than the screen, and what doesn't fit scrolls (160 pt
+        // floor, so a tiny or zero-size viewport never gives a negative size).
+        let max = (ctx.content_rect().size() - vec2(16.0, 64.0)).max(vec2(160.0, 160.0));
+        place_dialog(ctx, id, window.max_width(max.x).max_height(max.y)).open(&mut open).show(ctx, |ui| {
+            egui::ScrollArea::both().max_width(max.x).max_height(max.y).show(ui, |ui| close = body(app, ui, &mut d));
+        })
+    } else {
+        place_dialog(ctx, id, window).open(&mut open).show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            close = body(app, ui, &mut d);
+        })
+    };
     if shown.is_some() {
         count_dialog_frame(ctx, id);
     }

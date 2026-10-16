@@ -40,7 +40,8 @@ pub(crate) fn qat_enabled(app: &WordApp, id: &str) -> bool {
 /// The Quick Access Toolbar (#379): the user's commands (Save, Undo, Redo until customized), each
 /// with a right-click menu, then the menu button that customizes it (#376).
 fn quick_access(ui: &mut Ui, app: &mut WordApp) {
-    let ids: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
+    // A single-document host leaves out what it doesn't offer (Save, Print, New…).
+    let ids: Vec<String> = app.session.ribbon.qat().into_iter().filter(|id| app.offers(id)).map(str::to_string).collect();
     for (index, id) in ids.iter().enumerate() {
         let id = id.as_str();
         let tip = match id {
@@ -250,36 +251,39 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 // AutoSave switch: greyed out, with the reason as its tooltip, when AutoSave can't
-                // cover the document (#196, #176); clicking it then offers Save As where that helps.
-                let block = app.autosave_block();
-                let on = app.autosaves();
-                let label = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
-                ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(label));
-                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
-                let (fill, stroke, knob_fill) = match (&block, on) {
-                    (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
-                    (None, true) => (t.accent, t.accent, t.on_accent),
-                    (None, false) => (t.input, t.border_strong, t.text_dim),
-                };
-                ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-                let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
-                ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
-                let tip = block
-                    .as_ref()
-                    .map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
-                if resp.on_hover_text(tip).clicked() {
-                    match block {
-                        None => {
-                            let _ = app.run("file.autosave", json!({}));
+                // cover the document (#196); never shown in the browser, which can't write to the
+                // user's files (#176).
+                if app.autosave_block() != Some(crate::AutoSaveBlock::Browser) {
+                    let block = app.autosave_block();
+                    let on = app.autosaves();
+                    let label = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
+                    ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(label));
+                    let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                    let (fill, stroke, knob_fill) = match (&block, on) {
+                        (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
+                        (None, true) => (t.accent, t.accent, t.on_accent),
+                        (None, false) => (t.input, t.border_strong, t.text_dim),
+                    };
+                    ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+                    let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
+                    ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
+                    let tip = block
+                        .as_ref()
+                        .map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
+                    if resp.on_hover_text(tip).clicked() {
+                        match block {
+                            None => {
+                                let _ = app.run("file.autosave", json!({}));
+                            }
+                            // AutoSave comes on once Save As has saved (maybe on a later frame, #94).
+                            Some(b) if b.save_as_helps() => {
+                                let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
+                            }
+                            Some(b) => app.status(b.reason()),
                         }
-                        // AutoSave comes on once Save As has saved (maybe on a later frame, #94).
-                        Some(b) if b.save_as_helps() => {
-                            let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
-                        }
-                        Some(b) => app.status(b.reason()),
                     }
+                    ui.add_space(8.0);
                 }
-                ui.add_space(8.0);
                 quick_access(ui, app);
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -293,7 +297,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                     }
                     ui.add_space(8.0);
-                    if app.ui.show_discord {
+                    // A phone has no room for it, and a messenger's sandbox can't open the link.
+                    let narrow = crate::narrow(ui.ctx());
+                    if app.ui.show_discord && !narrow && !app.services.single_document {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
                         ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
                         icons::paint(
@@ -309,8 +315,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(8.0);
                     }
-                    // Search ("Tell me").
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+                    // Search ("Tell me"): just its icon on a phone.
+                    let (r, resp) = ui.allocate_exact_size(vec2(if narrow { control_h + 8.0 } else { 260.0 }, control_h), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                     icons::paint(
                         ui.painter(),
@@ -319,18 +325,20 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         t.text_dim,
                         t.accent,
                     );
-                    let ph = tl!("Search commands and help");
-                    let pfont = TypeRung::Control.regular();
-                    let ptrack = TypeRung::Control.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        ph,
-                        &pfont,
-                        ptrack,
-                        t.text_dim,
-                    );
+                    if !narrow {
+                        let ph = tl!("Search commands and help");
+                        let pfont = TypeRung::Control.regular();
+                        let ptrack = TypeRung::Control.tracking();
+                        paint_text(
+                            ui.painter(),
+                            pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
+                            Align2::LEFT_TOP,
+                            ph,
+                            &pfont,
+                            ptrack,
+                            t.text_dim,
+                        );
+                    }
                     if app.ui.keytips == crate::keytips::Phase::Tabs {
                         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
                     }
@@ -443,7 +451,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if st(ui, &wtxt).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
-                if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
+                // A phone keeps the page, the word count and the zoom.
+                let narrow = crate::narrow(ui.ctx());
+                if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) && !narrow {
                     st(ui, tl!("Editing header/footer"));
                 }
                 // The language at the caret; a click sets the proofing language (Review › Language).
@@ -457,12 +467,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     ),
                     None => tl!("Language").to_string(),
                 };
-                let resp = st(ui, &shown).on_hover_text(tip);
-                egui::Popup::menu(&resp).show(|ui| {
-                    ui.set_min_width(200.0);
-                    crate::ribbon::language_menu(ui, app);
-                });
-                if app.session.doc.settings.track_changes {
+                if !narrow {
+                    let resp = st(ui, &shown).on_hover_text(tip);
+                    egui::Popup::menu(&resp).show(|ui| {
+                        ui.set_min_width(200.0);
+                        crate::ribbon::language_menu(ui, app);
+                    });
+                }
+                if app.session.doc.settings.track_changes && !narrow {
                     st(ui, tl!("Track Changes: On"));
                 }
                 if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
@@ -470,6 +482,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if let Some((msg, at)) = &app.status_msg
                     && crate::now_ms() - at < 6000.0
+                    && !narrow
                 {
                     let font = TypeRung::Caption.regular();
                     let track = TypeRung::Caption.tracking();
@@ -500,7 +513,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
                     let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
+                    if !narrow && ui.add(slider).changed() {
                         let command = if reading { "view.readTextSize" } else { "view.zoom" };
                         let _ = app.run(command, json!({"value": (v * 100.0).round()}));
                     }
@@ -510,6 +523,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         } else {
                             let _ = app.run("view.zoomOut", json!({}));
                         }
+                    }
+                    if narrow {
+                        return;
                     }
                     ui.add_space(10.0);
                     let mode = app.session.view.mode;

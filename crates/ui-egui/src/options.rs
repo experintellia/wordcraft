@@ -193,16 +193,19 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     default_app_button(app, ui);
     ui.add_space(8.0);
-    section(ui, "Start-up");
-    let mut start = app.ui.start_screen;
-    if ui
-        .checkbox(&mut start, tl!("Show the Start screen when WordCraft starts"))
-        .on_hover_text(tl!(
-            "On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document."
-        ))
-        .changed()
-    {
-        let _ = app.run("ui.startScreen", json!({"value": start}));
+    // A document shared in a chat opens the chat's document, never a Start screen.
+    if !app.services.single_document {
+        section(ui, "Start-up");
+        let mut start = app.ui.start_screen;
+        if ui
+            .checkbox(&mut start, tl!("Show the Start screen when WordCraft starts"))
+            .on_hover_text(tl!(
+                "On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document."
+            ))
+            .changed()
+        {
+            let _ = app.run("ui.startScreen", json!({"value": start}));
+        }
     }
     ui.add_space(8.0);
     section(ui, "Personalize");
@@ -386,19 +389,18 @@ fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn save(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Save documents");
-    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
-    let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
-    let mut autosave = app.autosave && !browser;
-    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
-    if browser {
-        r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
-    } else if r.changed() {
-        app.autosave = autosave;
-        app.session.autosave = autosave;
+    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176):
+    // the setting isn't shown.
+    if app.autosave_block() != Some(crate::AutoSaveBlock::Browser) {
+        section(ui, "Save documents");
+        let mut autosave = app.autosave;
+        if ui.checkbox(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")).changed() {
+            app.autosave = autosave;
+            app.session.autosave = autosave;
+        }
+        note(ui, "AutoSave writes your changes to the file a moment after you stop typing.");
+        ui.add_space(8.0);
     }
-    note(ui, "AutoSave writes your changes to the file a moment after you stop typing.");
-    ui.add_space(8.0);
     // The open document's `file.privacyOptions` (#1062): saved with it, honoured when it is saved.
     section(ui, "Privacy for this document");
     let settings = &app.session.doc.settings;

@@ -29,8 +29,8 @@ hash, so they can be cached forever. Only `index.html` needs revalidation.
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
   `.js` files, and `no-cache` on `index.html`.
-- **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
-  or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
+- **HTTPS:** the clipboard only works in a secure context, which means `https://`
+  or `http://localhost`.
 - **No special isolation headers:** WordCraft doesn't use `SharedArrayBuffer`, so it doesn't
   need `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy`. If your site already sends
   COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
@@ -73,16 +73,9 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
-## Renderer selection and fallback flags
+## Renderer
 
-WordCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
-**WebGL2** on its own. URL query flags override this, and they work on the iframe `src` too:
+WordCraft renders with WebGL2 (eframe's glow backend): smaller and quicker to start than wgpu's
+WebGPU path, which egui's plain triangles don't need.
 
-| Flag | Effect |
-|---|---|
-| *(none)* | WebGPU if available, otherwise WebGL2 |
-| `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves) |
-
-For example: `<iframe src="https://example.com/wordcraft/?webgl" ...>`.
-
-A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+A browser without WebGL2 gets a message in place of the app.
