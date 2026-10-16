@@ -475,11 +475,11 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
     };
-    add(&mut fonts, "Inter", include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
-    add(&mut fonts, "InterMedium", include_bytes!("../../../assets/fonts/Inter-Medium.ttf"));
-    add(&mut fonts, "InterSemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
-    add(&mut fonts, "SourceSans", include_bytes!("../../../assets/fonts/SourceSans3-Regular.ttf"));
-    add(&mut fonts, "Mono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
+    add(&mut fonts, "Inter", wordcraft_fonts::INTER_REGULAR);
+    add(&mut fonts, "InterMedium", wordcraft_fonts::INTER_MEDIUM);
+    add(&mut fonts, "InterSemiBold", wordcraft_fonts::INTER_SEMIBOLD);
+    add(&mut fonts, "SourceSans", wordcraft_fonts::SOURCE_SANS_REGULAR);
+    add(&mut fonts, "Mono", wordcraft_fonts::JETBRAINS_MONO_REGULAR);
     if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
         prop.insert(0, "Inter".into());
         prop.push("SourceSans".into());

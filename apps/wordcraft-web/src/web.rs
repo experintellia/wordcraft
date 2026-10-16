@@ -13,6 +13,7 @@ const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt",
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
+mod webxdc;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
@@ -32,22 +33,18 @@ pub fn start() {
         if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
             log::error!("no unsaved-changes guard: {e}");
         }
-        let mut options = eframe::WebOptions::default();
-        if query().contains("webgl")
-            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
-        {
-            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
-        }
+        let options = eframe::WebOptions::default();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    if let Some(rs) = &cc.wgpu_render_state {
-                        log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
-                    }
+                    // In a messenger (webxdc) the document is the chat's, laid out with bundled fonts only.
+                    let xdc = webxdc::api();
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
-                    font_store::load_all(cc.egui_ctx.clone());
+                    if xdc.is_none() {
+                        font_store::load_all(cc.egui_ctx.clone());
+                    }
                     let inbox: Inbox = Inbox::default();
                     let pasted: Inbox = Inbox::default();
                     if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
@@ -56,27 +53,31 @@ pub fn start() {
                     // The browser's locale picks the new document's paper, the units and the
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
-                    let sample = query().contains("sample");
+                    let sample = xdc.is_none() && query().contains("sample");
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
-                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone()));
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    if let Some(api) = &xdc {
+                        webxdc::host(api, &mut session, &mut services, inbox.clone(), cc.egui_ctx.clone());
+                    }
+                    let mut app = WordApp::new(session, services);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    if !sample && xdc.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages }))
+                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false }))
                 }),
             )
             .await;
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>WordCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => el.set_inner_html(&format!("<p>WordCraft failed to start: {e:?}</p><p>A browser with WebGL2 is required.</p>")),
             }
         }
     });
@@ -92,6 +93,8 @@ struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
+    /// On a phone the page starts fitted to the screen's width (once the screen's size is known).
+    fitted: bool,
 }
 
 impl eframe::App for WebShell {
@@ -116,6 +119,13 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        // Once there is a page (the Start screen may come first).
+        if !self.fitted && ctx.content_rect().width() > 0.0 && self.app.has_document() {
+            self.fitted = true;
+            if wordcraft_ui_egui::narrow(ctx) {
+                let _ = self.app.execute("view.pageWidth", serde_json::json!({}));
+            }
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {

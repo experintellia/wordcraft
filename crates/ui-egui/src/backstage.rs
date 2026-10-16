@@ -28,9 +28,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
+    // One document shared in a chat: no others to make or open, no file to save to or print from.
+    let single = app.services.single_document;
+    if single && !IN_CHAT.contains(&app.ui.backstage_page.as_str()) {
+        app.ui.backstage_page = "info".into();
+    }
     let mac = app.integrated_titlebar;
+    // A phone leaves the pages most of its width.
+    let narrow = crate::narrow(ui.ctx());
+    let nav_w = if narrow { 150.0 } else { 200.0 };
     egui::Panel::left("backstage_nav")
-        .exact_size(200.0)
+        .exact_size(nav_w)
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
         .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { APP_COLOR }).inner_margin(egui::Margin {
@@ -44,7 +52,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
                 // from them as the title bar's own controls, and the rest of the band drags the window.
-                let (band, drag) = ui.allocate_exact_size(vec2(200.0, app.mac_titlebar.height), Sense::click_and_drag());
+                let (band, drag) = ui.allocate_exact_size(vec2(nav_w, app.mac_titlebar.height), Sense::click_and_drag());
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
@@ -54,7 +62,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
                 resp
             } else {
-                let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(nav_w, 40.0), Sense::click());
                 icons::paint(
                     ui.painter(),
                     Rect::from_center_size(pos2(r.min.x + 26.0, r.center().y), vec2(18.0, 18.0)),
@@ -70,10 +78,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.canvas.want_focus = true;
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
-            for (id, label) in PAGES {
+            // A file may still replace the shared document (the host's file picker).
+            let replace = [("replace", "Replace with File…")];
+            let pages = PAGES.iter().filter(|(id, _)| !single || IN_CHAT.contains(id));
+            for &(id, label) in replace.iter().filter(|_| single).chain(pages) {
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
                 let on = has_document || works_without_document(id);
-                let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
+                let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(nav_w, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
                 if active {
@@ -108,6 +119,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "saveAs" => {
                             app.ui.backstage_page = "saveAs".into();
                         }
+                        "replace" => {
+                            let _ = app.run("file.open", json!({}));
+                        }
                         // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
                         // are unsaved changes, and Cancel leaves the Backstage where it was.
                         "close" => {
@@ -118,8 +132,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
-                    let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
+                // A messenger's sandbox can't open the community link.
+                let links: &[(&str, &str)] =
+                    if app.services.single_document { &[("About", "about")] } else { &[("About", "about"), ("Discord community", "discord")] };
+                for &(label, id) in links {
+                    let (r, resp) = ui.allocate_exact_size(vec2(nav_w, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
@@ -136,7 +153,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { t.ribbon }).inner_margin(egui::Margin::symmetric(40, 30)))
+        .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { t.ribbon }).inner_margin(if narrow {
+            egui::Margin::symmetric(12, 16)
+        } else {
+            egui::Margin::symmetric(40, 30)
+        }))
         .show(ui, |ui| {
             // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
             if app.ui.backstage_page == "print" {
@@ -210,6 +231,9 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
         }
     });
 }
+
+/// The Backstage pages a [`crate::Services::single_document`] host shows.
+const IN_CHAT: [&str; 4] = ["info", "saveAs", "export", "options"];
 
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
@@ -386,6 +410,10 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
 /// opens it, which is not what Save As is for.
 fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Save As");
+    if app.services.single_document {
+        ui.label(tl!("Sends a copy of the document to the chat."));
+        ui.add_space(10.0);
+    }
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();
     }
@@ -394,7 +422,9 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
-    ui.columns(2, |cols| {
+    // A phone stacks the two columns.
+    let n = if crate::narrow(ui.ctx()) { 1 } else { 2 };
+    ui.columns(n, |cols| {
         let ui = &mut cols[0];
         ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
         // The fields edit a copy of the document's properties that is read afresh every frame,
@@ -445,7 +475,10 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
                 let _ = app.run("file.encrypt", json!({"password": null}));
             }
         });
-        let ui = &mut cols[1];
+        let ui = &mut cols[n - 1];
+        if n == 1 {
+            ui.add_space(16.0);
+        }
         ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
         for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
             ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
@@ -858,5 +891,81 @@ mod tests {
         h.get_by_label("Save As").click();
         h.run_steps(4);
         assert_eq!(h.state().ui.backstage_page, "saveAs");
+    }
+
+    /// A single-document host (webxdc) with a counting file picker and a download hook.
+    fn chat_app(picked: std::rc::Rc<std::cell::RefCell<Vec<String>>>, sent: std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> WordApp {
+        let services = Services {
+            single_document: true,
+            open_async: Some(Box::new(move |purpose: &str| picked.borrow_mut().push(purpose.to_string()))),
+            download: Some(Box::new(move |name: &str, _: &[u8]| {
+                sent.borrow_mut().push(name.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Shared")), services)
+    }
+
+    fn chat_harness(app: WordApp, size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn a_single_document_host_offers_no_other_documents_files_or_printing() {
+        let (picked, sent) = (Default::default(), Default::default());
+        let mut a = chat_app(std::rc::Rc::clone(&picked), std::rc::Rc::clone(&sent));
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        let mut h = chat_harness(a, egui::vec2(1440.0, 900.0));
+        assert_eq!(h.state().ui.backstage_page, "info", "Home is about other documents");
+        for gone in ["Home", "New", "Open", "Recover", "Save", "Print", "Close"] {
+            assert!(h.query_all_by_label(gone).next().is_none(), "File offers {gone}");
+        }
+        for kept in ["Info", "Save As", "Export", "Options"] {
+            assert!(h.query_all_by_label(kept).next().is_some(), "File lacks {kept}");
+        }
+        h.get_by_label("Replace with File…").click();
+        h.run_steps(2);
+        assert_eq!(*picked.borrow(), ["document"], "Replace with File asks the host for a file");
+        let a = h.state_mut();
+        for id in ["file.new", "file.close", "file.save", "file.print", "font.add", "font.loadSystem", "file.autosave"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} ran");
+        }
+        assert!(a.execute("ui.print", json!({})).is_err());
+        // A path names no file the chat has: Open asks the host for one instead.
+        assert_eq!(a.execute("file.open", json!({"path": "/etc/hostname"})).unwrap(), json!({"pending": "open"}));
+        assert_eq!(picked.borrow().len(), 2);
+        assert!(!crate::widgets::enabled(a, "file.print") && !crate::widgets::enabled(a, "file.new"));
+        // Save As and Export hand a copy to the host.
+        a.execute("file.saveAs", json!({"path": "Shared.docx"})).unwrap();
+        a.execute("file.exportPdf", json!({})).unwrap();
+        assert_eq!(sent.borrow().len(), 2);
+        assert!(sent.borrow()[1].ends_with(".pdf"));
+    }
+
+    #[test]
+    fn a_phone_keeps_dialogs_and_the_file_pages_on_screen() {
+        let mut a = chat_app(Default::default(), Default::default());
+        a.run("ui.dialog", json!({"name": "font"})).unwrap();
+        let mut h = chat_harness(a, egui::vec2(390.0, 844.0));
+        assert!(h.state().dialog.is_some(), "the Font dialog opened");
+        let r = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", "Font")))).unwrap();
+        assert!(r.min.x >= 0.0 && r.max.x <= 390.0 && r.max.y <= 844.0, "the dialog leaves the screen: {r:?}");
+        // The tab strip keeps room for the tabs.
+        h.state_mut().dialog = None;
+        h.run_steps(4);
+        assert!(h.query_by_label("Home").is_some(), "no Home tab on a phone");
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
+        h.run_steps(4);
+        assert!(h.query_by_label("Replace with File…").is_some());
     }
 }
