@@ -146,7 +146,8 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
-        if !self.fitted && ctx.content_rect().width() > 0.0 {
+        // Once there is a page (the Start screen may come first).
+        if !self.fitted && ctx.content_rect().width() > 0.0 && self.app.has_document() {
             self.fitted = true;
             if wordcraft_ui_egui::narrow(ctx) {
                 let _ = self.app.execute("view.pageWidth", serde_json::json!({}));

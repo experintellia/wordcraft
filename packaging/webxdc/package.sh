@@ -31,8 +31,9 @@ for wasm in "$SITE"/*_bg.wasm; do
     s{<link rel="preload" href="\./\Q$ENV{NAME}\E"[^>]*>}{};
     s{\x27\./\Q$ENV{NAME}\E\x27}{fetch("./$ENV{NAME}.gz").then(r => new Response(r.body.pipeThrough(new DecompressionStream("gzip")), { headers: { "content-type": "application/wasm" } }))};
   ' "$SITE/index.html"
-  grep -q "$name.gz" "$SITE/index.html" || { echo "error: index.html doesn't load $name.gz (trunk's loader changed?)" >&2; exit 1; }
 done
+# Also on a rerun with --skip-build, where there is no .wasm left to rewrite.
+grep -q '_bg\.wasm\.gz' "$SITE/index.html" || { echo "error: index.html doesn't load the gzipped wasm (trunk's loader changed?)" >&2; exit 1; }
 
 cp -f "$ROOT/assets/app-icon/wordcraft-macos-512.png" "$SITE/icon.png"
 cat > "$SITE/manifest.toml" <<TOML
