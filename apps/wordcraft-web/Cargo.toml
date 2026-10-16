@@ -1,6 +1,6 @@
 [package]
 name = "wordcraft-web"
-description = "WordCraft in the browser (eframe web runner, WebGPU with WebGL2 fallback)"
+description = "WordCraft in the browser (eframe web runner, WebGL2)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,13 @@ workspace = true
 name = "wordcraft-web"
 path = "src/main.rs"
 
+[features]
+default = ["more-images"]
+# WebP and TIFF pictures; the webxdc build (webxdc.html) leaves them out to stay small.
+more-images = ["image/webp", "image/tiff"]
+
 [dependencies]
+image = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 egui = { workspace = true }
@@ -23,8 +29,9 @@ wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+# glow (WebGL2), not wgpu: egui draws plain textured triangles, and wgpu's WebGPU setup and naga
+# shader translator made the module bigger and the first frame later.
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
 rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

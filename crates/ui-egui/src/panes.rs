@@ -15,9 +15,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     // SmartArt Design › Text Pane, while a SmartArt graphic WordCraft can edit is selected.
     if app.session.view.smart_art_pane && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
-        egui::Panel::left("smart_art_pane")
-            .default_size(250.0)
-            .resizable(true)
+        on_phone(egui::Panel::left("smart_art_pane").default_size(250.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| {
                 if header(ui, "Text Pane") {
@@ -28,51 +26,37 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
     }
     if app.session.view.nav_pane {
-        egui::Panel::left("nav_pane")
-            .default_size(260.0)
-            .resizable(true)
+        on_phone(egui::Panel::left("nav_pane").default_size(260.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| nav(app, ui));
     }
     if app.session.view.clipboard_pane {
-        egui::Panel::left("clipboard_pane")
-            .default_size(250.0)
-            .resizable(true)
+        on_phone(egui::Panel::left("clipboard_pane").default_size(250.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| clipboard(app, ui));
     }
     if app.session.view.styles_pane {
-        egui::Panel::right("styles_pane")
-            .default_size(250.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("styles_pane").default_size(250.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| styles(app, ui));
     }
     if app.session.view.style_inspector {
-        egui::Panel::right("style_inspector")
-            .default_size(240.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("style_inspector").default_size(240.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| inspector(app, ui));
     }
     if app.session.view.accessibility_pane {
-        egui::Panel::right("accessibility_pane")
-            .default_size(280.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("accessibility_pane").default_size(280.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| crate::a11y_pane::accessibility(app, ui));
     }
     if app.session.view.alt_text_pane {
-        egui::Panel::right("alt_text_pane")
-            .default_size(260.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("alt_text_pane").default_size(260.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| crate::a11y_pane::alt_text(app, ui));
     }
     if app.restrict.open {
-        egui::Panel::right("restrict_pane")
-            .default_size(270.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("restrict_pane").default_size(270.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| {
                 if header(ui, "Restrict Editing") {
@@ -83,12 +67,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             });
     }
     if app.session.view.comments_pane {
-        egui::Panel::right("comments_pane")
-            .default_size(290.0)
-            .resizable(true)
+        on_phone(egui::Panel::right("comments_pane").default_size(290.0).resizable(true), ui)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| comments(app, ui));
     }
+}
+
+/// On a phone a pane covers the page (closing it brings the page back): beside it the page would be
+/// a sliver.
+fn on_phone(panel: egui::Panel, ui: &Ui) -> egui::Panel {
+    if crate::narrow(ui.ctx()) { panel.resizable(false).exact_size(ui.available_width()) } else { panel }
 }
 
 pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {

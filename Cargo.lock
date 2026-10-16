@@ -1076,6 +1076,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "egui_glow",
+ "glow",
  "glutin",
  "glutin-winit",
  "image",
@@ -5141,6 +5142,7 @@ dependencies = [
  "egui",
  "fmv-macos-events",
  "getrandom 0.3.4",
+ "image",
  "log",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -5166,6 +5168,7 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.9.0"
 dependencies = [
+ "image",
  "serde_json",
  "sys-locale",
  "wordcraft-doc",
@@ -5411,6 +5414,7 @@ version = "0.9.0"
 dependencies = [
  "eframe",
  "egui",
+ "image",
  "js-sys",
  "log",
  "rfd",

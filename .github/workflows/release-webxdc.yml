@@ -1,0 +1,62 @@
+# Builds the webxdc app (packaging/webxdc/package.sh) and attaches it to a GitHub Release as
+# `wordcraft.xdc`. A pushed `v*` tag releases under that tag; a manual run releases under
+# `v<Cargo.toml version>`. An existing release gets its wordcraft.xdc replaced.
+name: Release webxdc
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-webxdc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  xdc:
+    # A manual run releases only from the webxdc branch, never from an unreviewed branch.
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/webxdc'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      TRUNK_VERSION: "0.21.14"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (stable + wasm32)
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin trunk
+          trunk --version
+
+      - name: Build wordcraft.xdc
+        run: |
+          packaging/webxdc/package.sh
+          . packaging/env.sh
+          cp "$DIST/wordcraft-$VERSION.xdc" wordcraft.xdc
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"; else TAG="v$VERSION"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" wordcraft.xdc --clobber
+          else
+            gh release create "$TAG" wordcraft.xdc --target "$GITHUB_SHA" \
+              --title "WordCraft $TAG (webxdc)" \
+              --notes "WordCraft as a webxdc app: send wordcraft.xdc to a Delta Chat chat; everyone who opens it edits the same document."
+          fi

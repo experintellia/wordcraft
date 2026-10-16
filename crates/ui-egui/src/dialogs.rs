@@ -1470,10 +1470,19 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     };
     let id = egui::Id::new(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
-    let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
-        ui.set_min_width(340.0);
-        close = body(app, ui, &mut d);
-    });
+    let shown = if crate::narrow(ctx) {
+        // A phone: no wider or taller than the screen, and what doesn't fit scrolls (160 pt
+        // floor, so a tiny or zero-size viewport never gives a negative size).
+        let max = (ctx.content_rect().size() - vec2(16.0, 64.0)).max(vec2(160.0, 160.0));
+        place_dialog(ctx, id, window.max_width(max.x).max_height(max.y)).show(ctx, |ui| {
+            egui::ScrollArea::both().max_width(max.x).max_height(max.y).show(ui, |ui| close = body(app, ui, &mut d));
+        })
+    } else {
+        place_dialog(ctx, id, window).show(ctx, |ui| {
+            ui.set_min_width(340.0);
+            close = body(app, ui, &mut d);
+        })
+    };
     if let Some(shown) = &shown {
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);

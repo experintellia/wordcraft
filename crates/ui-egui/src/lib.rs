@@ -172,7 +172,45 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// The app is one document shared in a chat (webxdc): no other documents to make or open, no
+    /// file of its own to save to, no printing and no added fonts, so every member lays the text
+    /// out with the same bundled fonts ([`NOT_IN_CHAT`]). File keeps Info, Save As and Export,
+    /// which hand a copy to `download`, and Replace with File…, which asks `open_async` for a file
+    /// that then replaces the document.
+    pub single_document: bool,
 }
+
+/// Below this window width (points) the window is a phone's: the chrome keeps only what fits
+/// (no rulers, no title-bar search box or community button, a short status bar).
+pub const PHONE_WIDTH: f32 = 600.0;
+
+/// Whether the window is phone-narrow ([`PHONE_WIDTH`]).
+pub fn narrow(ctx: &egui::Context) -> bool {
+    ctx.content_rect().width() < PHONE_WIDTH
+}
+
+/// Commands a [`Services::single_document`] host leaves out. `file.save` is left out of File,
+/// the Quick Access Toolbar and the keyboard but still serves the Save Changes prompt, where it
+/// hands a copy to the host before the document is replaced.
+pub const NOT_IN_CHAT: &[&str] = &[
+    "file.new",
+    "file.close",
+    "file.save",
+    "file.print",
+    "file.printPdf",
+    "file.printMarkup",
+    "file.recover",
+    "file.autosave",
+    "font.add",
+    "font.loadSystem",
+    "ui.print",
+    "ui.printSettings",
+    "ui.printSubmit",
+    "ui.fileBrowser",
+    "ui.makeDefaultApp",
+    "ui.recoveryDiscard",
+    "ui.startScreen",
+];
 
 /// How Save in the Save Changes prompt went.
 enum PromptSave {
@@ -838,6 +876,11 @@ impl WordApp {
         }
     }
 
+    /// Whether this host offers command `id`: a single-document host leaves out [`NOT_IN_CHAT`].
+    pub fn offers(&self, id: &str) -> bool {
+        !(self.services.single_document && NOT_IN_CHAT.contains(&id))
+    }
+
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.canvas.keep_view = true;
@@ -850,6 +893,9 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if !self.offers(id) {
+            return Err(self.not_in_chat(id));
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -918,6 +964,17 @@ impl WordApp {
         r
     }
 
+    /// Why a single-document host refuses `id`, also shown in the status bar.
+    fn not_in_chat(&mut self, id: &str) -> String {
+        let e = if id.contains("print") || id.contains("Print") {
+            tl!("Printing isn't available in a chat. Export a PDF instead.").to_string()
+        } else {
+            tl!("This isn't available in a document shared in a chat.").to_string()
+        };
+        self.status(e.clone());
+        e
+    }
+
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -934,6 +991,15 @@ impl WordApp {
             let e = tl!("No document is open. Create a document or open one first.").to_string();
             self.status(e.clone());
             return Err(e);
+        }
+        // The Save Changes prompt's Save still hands a copy over (see `NOT_IN_CHAT`).
+        if id != "file.save" && !self.offers(id) {
+            return Err(self.not_in_chat(id));
+        }
+        // A single-document host has no files to open by path: Open asks the host for one.
+        if self.services.single_document && id == "file.open" && params.get("data").is_none() {
+            self.open_dialog();
+            return Ok(json!({"pending": "open"}));
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;

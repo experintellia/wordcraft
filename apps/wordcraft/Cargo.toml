@@ -11,6 +11,8 @@ description = "WordCraft desktop app"
 workspace = true
 
 [dependencies]
+# Every picture format the engine reads (see the workspace `image` entry).
+image = { workspace = true, features = ["webp", "tiff"] }
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-proof = { workspace = true }
