@@ -1467,6 +1467,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // document-first line may be scrolled offscreen; using it would pin the toolbar to an
         // old screen position unrelated to the visible selection.
         app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(screen_rects, visible_clip);
+        // The other members of a shared document.
+        crate::peers::paint(app, &painter, &layout, &rects, geo.scale);
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         // Read Aloud: the sentence being spoken.

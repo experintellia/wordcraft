@@ -80,7 +80,9 @@ pub fn start() {
                     if !sample && xdc.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false, prefs }))
+                    // The chat's one document, edited by everyone in it.
+                    let shared = xdc.map(|api| webxdc::Shared::new(api, &mut app, cc.egui_ctx.clone()));
+                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false, shared, prefs }))
                 }),
             )
             .await;
@@ -105,6 +107,8 @@ struct WebShell {
     messages: Rc<RefCell<Vec<String>>>,
     /// On a phone the page starts fitted to the screen's width (once the screen's size is known).
     fitted: bool,
+    /// Inside a messenger: the shared document.
+    shared: Option<webxdc::Shared>,
     prefs: crate::prefs::PrefsSync,
 }
 
@@ -119,6 +123,9 @@ fn stored_prefs() -> Option<String> {
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(shared) = &mut self.shared {
+            shared.before(&mut self.app);
+        }
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
             let inbox = self.inbox.clone();
@@ -164,6 +171,9 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        if let Some(shared) = &mut self.shared {
+            shared.after(&mut self.app);
+        }
     }
 }
 

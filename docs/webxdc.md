@@ -1,6 +1,6 @@
 # WordCraft as a webxdc app
 
-_Last updated: 2026-10-16_
+_Last updated: 2026-10-16 (shared editing)_
 
 This fork (`experintellia/wordcraft`, branch `webxdc`) ships WordCraft as a [webxdc](https://webxdc.org/)
 app: one `.xdc` file sent into a Delta Chat (or other messenger) chat, run inside the messenger,
@@ -32,6 +32,43 @@ When `window.webxdc` exists, `apps/wordcraft-web/src/web/webxdc.rs` makes the ap
 - fonts: only those bundled in the wasm (`assets/fonts`, never `CRAFT_FONTS_DIR`); adding fonts and
   loading system fonts are off, so every member lays the same text out the same way;
 - the author of comments and tracked changes is the member's chat name (`selfName`).
+
+## Shared editing
+
+Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired up in
+`src/web/webxdc.rs`):
+
+- **Ops in a Yjs array.** Each change becomes an op appended to a `yrs` array; updates travel by
+  `sendUpdate` (stored by the messenger, replayed on every start; merged and sent at most every
+  3 s) and at once over the realtime channel. Every member replays the same op order from a blank
+  document on a replica session, rolling back to a cached state when an op lands earlier.
+- **What an op carries.** The command and its parameters, the selection and the formatting waiting
+  at the caret, the author (the chat name), the clock and the preferences that differ from the
+  defaults (AutoCorrect…). The author checks that replaying the op gives the same document; when
+  it doesn't (the clipboard, the format painter, the view), the op carries the change instead: the
+  changed paragraphs and tables and the changed fields, with a hash of what they replace. An
+  opened file travels as its bytes; pictures as base64. Typing is held back for 0.7 s and shared
+  as one op.
+- **Concurrent edits merge.** An op records how many ops of each member its author had seen. On
+  replay its positions are carried through the ops before it that its author hadn't seen, mapped
+  from the documents themselves (unchanged blocks are the same `Arc`; a changed run's text is
+  aligned with Myers' diff). Two members typing in the same paragraph both land where they meant;
+  at the same spot the log order decides. Parts and comments made concurrently get other ids in
+  the final order, and ids an op names are moved past them.
+- **Undo takes back only your own changes**: Undo finds what your step left in the document as it
+  is now and puts back what was there before; refused (with a message) when someone changed one of
+  the same paragraphs, tables or fields since.
+- **Presence.** Each member's selection, name and colour travel over the realtime channel and are
+  drawn on the others' pages (`crates/ui-egui/src/peers.rs`).
+- **Comments and track changes** are stamped with the chat name; Review › Track Changes is a
+  setting of the document, so it is on for everyone.
+- **Hostile ops** are refused: commands that touch files or name a path, macros, unknown commands,
+  positions deeper than 64 levels, patches whose hashes don't match or that are oversized. An edit
+  too big for the messenger (`sendUpdateMaxSize`) is taken back with a message.
+
+Tests: `cargo test -p wordcraft-web` (a convergence fuzz with three members and shuffled delivery,
+`WORDCRAFT_COLLAB_SEEDS=100` to soak it; undo and redo per member; hostile ops; layout-dependent
+results such as a table of contents replayed by a late joiner).
 
 ## Size
 

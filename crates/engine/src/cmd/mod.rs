@@ -425,8 +425,27 @@ pub fn iso_from_unix_secs(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
-/// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web.
+thread_local! {
+    static CLOCK: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Fix the clock commands read ([`now_unix`], [`now_iso`]) to `secs`, or let it run again with
+/// `None`. Shared editing replays a member's command at the time it ran.
+pub fn set_clock(secs: Option<u64>) {
+    CLOCK.with(|c| c.set(secs));
+}
+
+/// The fixed clock, if [`set_clock`] set one.
+pub fn clock() -> Option<u64> {
+    CLOCK.with(std::cell::Cell::get)
+}
+
+/// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web (or the
+/// one [`set_clock`] fixed).
 pub fn now_unix() -> u64 {
+    if let Some(secs) = clock() {
+        return secs;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
