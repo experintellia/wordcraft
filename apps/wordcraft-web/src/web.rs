@@ -70,7 +70,13 @@ pub fn start() {
                     if !sample && xdc.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false }))
+                    // The chat's one document, edited by everyone in it.
+                    let shared = xdc.map(|api| Rc::new(RefCell::new(webxdc::Shared::new(api, &mut app, cc.egui_ctx.clone()))));
+                    let app = Rc::new(RefCell::new(app));
+                    if let Some(shared) = &shared {
+                        webxdc::flush_on_hide(app.clone(), shared.clone());
+                    }
+                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false, shared }))
                 }),
             )
             .await;
@@ -90,15 +96,24 @@ fn query() -> String {
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
 /// and feed them through the inbox.
 struct WebShell {
-    app: WordApp,
+    /// Shared with the page-hide handler inside a messenger (it runs between frames).
+    app: Rc<RefCell<WordApp>>,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     /// On a phone the page starts fitted to the screen's width (once the screen's size is known).
     fitted: bool,
+    /// Inside a messenger: the shared document.
+    shared: Option<Rc<RefCell<webxdc::Shared>>>,
 }
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let Ok(mut app) = self.app.try_borrow_mut() else { return };
+        if let Some(shared) = &self.shared
+            && let Ok(mut shared) = shared.try_borrow_mut()
+        {
+            shared.before(&mut app);
+        }
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
             let inbox = self.inbox.clone();
@@ -116,24 +131,32 @@ impl eframe::App for WebShell {
         }
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
-            self.app.status(msg);
+            app.status(msg);
         }
-        self.app.logic(ctx);
+        app.logic(ctx);
         // Once there is a page (the Start screen may come first).
-        if !self.fitted && ctx.content_rect().width() > 0.0 && self.app.has_document() {
+        if !self.fitted && ctx.content_rect().width() > 0.0 && app.has_document() {
             self.fitted = true;
             if wordcraft_ui_egui::narrow(ctx) {
-                let _ = self.app.execute("view.pageWidth", serde_json::json!({}));
+                let _ = app.execute("view.pageWidth", serde_json::json!({}));
             }
         }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(raw);
+        if let Ok(mut app) = self.app.try_borrow_mut() {
+            app.raw_input_hook(raw);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.app.ui(ui);
+        let Ok(mut app) = self.app.try_borrow_mut() else { return };
+        app.ui(ui);
+        if let Some(shared) = &self.shared
+            && let Ok(mut shared) = shared.try_borrow_mut()
+        {
+            shared.after(&mut app);
+        }
     }
 }
 
