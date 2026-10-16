@@ -7232,3 +7232,29 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+#[test]
+fn the_journal_records_top_level_edits_as_they_ran_and_leaves_undo_to_the_host() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Hello"));
+    s.journal = Some(vec![]);
+    s.sel = crate::Selection::caret(Pos::body(0, 5));
+    s.run("text.insert", &json!({"text": " world"})).unwrap();
+    s.run("caret.left", &json!({})).unwrap();
+    // Table insertion runs nested commands: one entry.
+    s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    let j = s.journal.take().unwrap();
+    assert_eq!(j.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["text.insert", "insert.table"]);
+    assert_eq!(j[0].sel, crate::Selection::caret(Pos::body(0, 5)));
+    assert_eq!(j[0].before.plain_text(StoryRef::Body), "Hello");
+    assert_eq!(j[0].after.plain_text(StoryRef::Body), "Hello world");
+    assert!(crate::cmd::clock().is_none(), "the clock runs again after the command");
+    s.journal = Some(vec![]);
+    let doc = s.doc.clone();
+    assert_eq!(s.run("edit.undo", &json!({})).unwrap(), json!({"host": true}));
+    assert_eq!(s.doc, doc, "the host undoes, not the session");
+    assert_eq!(s.journal.as_ref().unwrap()[0].id, "edit.undo");
+    // A fixed clock stamps what the command makes.
+    crate::cmd::set_clock(Some(86_400));
+    assert_eq!(crate::cmd::now_iso(), "1970-01-02T00:00:00Z");
+    crate::cmd::set_clock(None);
+}

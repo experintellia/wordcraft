@@ -466,6 +466,32 @@ pub struct Session {
     edit_marks: Vec<Pos>,
     /// How many Go Back presses since the last edit (which place comes next).
     go_back_step: usize,
+    /// Shared editing (the webxdc host): while set, each top-level command that changed the
+    /// document is recorded here for the host to share, and Undo, Redo and Undo Actions are left
+    /// to the host (recorded, the document untouched: the host takes back only this member's own
+    /// changes). See [`Edit`].
+    pub journal: Option<Vec<Edit>>,
+    /// Shared editing: the host's undo and redo lists (labels, oldest first), which the Undo and
+    /// Redo buttons and lists show instead of the session's own.
+    pub host_history: Option<(Vec<String>, Vec<String>)>,
+    /// How deep `run` is in nested commands (0: a command run by the UI or a script).
+    run_depth: u32,
+}
+
+/// A command a [`Session::journal`] recorded: what ran, as it ran.
+#[derive(Clone, Debug)]
+pub struct Edit {
+    pub id: String,
+    pub params: Value,
+    /// The selection and the formatting waiting at the caret before it ran.
+    pub sel: Selection,
+    pub pending: Option<CharProps>,
+    /// The clock it read (Unix seconds; [`crate::cmd::set_clock`]).
+    pub time: u64,
+    /// The document before and after (blocks are shared, so cheap), and the selection after.
+    pub before: Document,
+    pub after: Document,
+    pub sel_after: Selection,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).
@@ -650,6 +676,9 @@ impl Session {
             widened: None,
             edit_marks: Vec::new(),
             go_back_step: 0,
+            journal: None,
+            host_history: None,
+            run_depth: 0,
         }
     }
 
@@ -895,28 +924,45 @@ impl Session {
         self.typing_open = false;
     }
     pub fn can_undo(&self) -> bool {
-        !self.history.is_empty()
+        self.undo_depth() > 0
     }
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        match &self.host_history {
+            Some((_, redo)) => !redo.is_empty(),
+            None => !self.redo.is_empty(),
+        }
     }
     pub fn undo_label(&self) -> Option<&str> {
-        self.history.last().map(|u| u.label.as_str())
+        self.undo_history().first().copied()
     }
     pub fn redo_label(&self) -> Option<&str> {
-        self.redo.last().map(|u| u.label.as_str())
+        match &self.host_history {
+            Some((_, redo)) => redo.last().map(String::as_str),
+            None => self.redo.last().map(|u| u.label.as_str()),
+        }
     }
     /// The number of undo steps.
     pub fn undo_depth(&self) -> usize {
-        self.history.len()
+        match &self.host_history {
+            Some((undo, _)) => undo.len(),
+            None => self.history.len(),
+        }
     }
     pub fn undo_labels(&self) -> Vec<String> {
-        self.history.iter().rev().map(|u| u.label.clone()).collect()
+        self.undo_history_all().into_iter().map(str::to_string).collect()
     }
     /// The Undo button's list (#701): the undo steps' labels (English, as commands name them),
     /// newest first, at most [`UNDO_LIST_MAX`].
     pub fn undo_history(&self) -> Vec<&str> {
-        self.history.iter().rev().take(UNDO_LIST_MAX).map(|u| u.label.as_str()).collect()
+        let mut all = self.undo_history_all();
+        all.truncate(UNDO_LIST_MAX);
+        all
+    }
+    fn undo_history_all(&self) -> Vec<&str> {
+        match &self.host_history {
+            Some((undo, _)) => undo.iter().rev().map(String::as_str).collect(),
+            None => self.history.iter().rev().map(|u| u.label.as_str()).collect(),
+        }
     }
     /// Undo the newest `count` steps in one go, as picking an entry in the Undo list does (#701).
     /// More than the undo depth undoes everything; a step that would take the document's
@@ -1103,6 +1149,10 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // The host's record of edits, like the clipboard: not part of the document's history.
+            journal: _,
+            host_history: _,
+            run_depth: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -1165,6 +1215,59 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        // Shared editing: Undo and Redo of the shared document are the host's (`journal`).
+        let top = self.run_depth == 0 && self.journal.is_some();
+        if top && matches!(id, "edit.undo" | "edit.redo" | "edit.undoTo") {
+            let edit = Edit {
+                id: id.to_string(),
+                params: params.clone(),
+                sel: self.sel.clone(),
+                pending: self.pending.clone(),
+                time: crate::cmd::now_unix(),
+                before: self.doc.clone(),
+                after: self.doc.clone(),
+                sel_after: self.sel.clone(),
+            };
+            if let Some(j) = self.journal.as_mut() {
+                j.push(edit);
+            }
+            return Ok(serde_json::json!({"host": true}));
+        }
+        // The command reads one clock, which the journal records (a replay sets it).
+        let fixed = top && crate::cmd::clock().is_none();
+        if fixed {
+            crate::cmd::set_clock(Some(crate::cmd::now_unix()));
+        }
+        let (sel, pending) = (self.sel.clone(), self.pending.clone());
+        let (before, rev) = (top.then(|| self.doc.clone()), self.rev);
+        self.run_depth += 1;
+        let result = self.run_inner(id, params);
+        self.run_depth -= 1;
+        // A command that changed the document, marked so or not (opening a file).
+        if let (Some(before), Ok(_)) = (before, &result)
+            && (self.registry.get(id).is_some_and(|s| s.mutates) || self.rev != rev)
+        {
+            let edit = Edit {
+                id: id.to_string(),
+                params: params.clone(),
+                sel,
+                pending,
+                time: crate::cmd::now_unix(),
+                before,
+                after: self.doc.clone(),
+                sel_after: self.sel.clone(),
+            };
+            if let Some(j) = self.journal.as_mut() {
+                j.push(edit);
+            }
+        }
+        if fixed {
+            crate::cmd::set_clock(None);
+        }
+        result
+    }
+
+    fn run_inner(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };

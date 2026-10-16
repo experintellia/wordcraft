@@ -66,6 +66,7 @@ pub mod objects;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+pub mod peers;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
@@ -465,6 +466,8 @@ pub struct WordApp {
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
+    /// The other members of a shared document (webxdc), drawn on the page ([`peers`]).
+    pub peers: Vec<peers::Peer>,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).
@@ -677,7 +680,14 @@ impl WordApp {
             info_editing: None,
             recovery_seen: false,
             no_document: None,
+            peers: Vec::new(),
         }
+    }
+
+    /// While a host loads the document (webxdc: the chat's stored edits), nothing is open:
+    /// the ribbon is greyed out and there is no page to type into.
+    pub fn set_loading(&mut self, loading: bool) {
+        self.no_document = loading.then(|| self.session.document_id());
     }
 
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
