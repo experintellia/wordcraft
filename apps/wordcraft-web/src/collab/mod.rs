@@ -33,7 +33,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Document, Path, Pos, StoryRef};
+use wordcraft_doc::{Document, Pos, StoryRef};
 use wordcraft_engine::{Edit, Prefs, Selection, Session};
 use yrs::updates::decoder::Decode as _;
 use yrs::{Any, Array as _, ArrayRef, Doc, Out, ReadTxn as _, Transact as _, Update};
@@ -42,11 +42,12 @@ use patch::Patch;
 
 /// Ops further back than this are taken as seen by every later op.
 // ponytail: an op made after this many unseen ops (a long offline session) lands unrebased;
-// raise it, or rebase through a checkpoint, if long offline edits get common.
-const WINDOW: usize = 512;
-/// Cached states: after each of the last `RECENT` ops, and every `CHECKPOINT_EVERY` ops (the last
-/// `CHECKPOINTS`); anything else is replayed from the nearest one before it.
-const RECENT: usize = 64;
+// raise it (and `RECENT`), or rebase through a checkpoint, if long offline edits get common.
+const WINDOW: usize = 256;
+/// Cached states: after each of the last `RECENT` ops (every state an op's rebase can need), and
+/// every `CHECKPOINT_EVERY` ops (the last `CHECKPOINTS`); anything else is replayed from the
+/// nearest one before it.
+const RECENT: usize = WINDOW + 1;
 const CHECKPOINT_EVERY: usize = 32;
 const CHECKPOINTS: usize = 64;
 /// Typing is held back this long (ms) and shared as one op.
@@ -112,7 +113,7 @@ pub struct Collab {
     counts: BTreeMap<u64, u32>,
     /// The document after n ops.
     states: BTreeMap<usize, Document>,
-    /// Runs the ops: default view, empty clipboard, no history.
+    /// Runs the ops, renewed for each one ([`Session::renew`]).
     replica: Session,
     /// This member and device.
     client: u64,
@@ -127,6 +128,24 @@ pub struct Collab {
     pub max_op: usize,
     /// An edit was refused this frame: the session goes back to the shared document.
     revert: bool,
+    /// Ops ([`op_hash`]) that crashed this app while replaying (a panic aborts on the web): left
+    /// out, so one bad op can't stop the chat's document from opening. Every member crashes on
+    /// such an op once and leaves it out from then on, so they still agree.
+    pub skip: BTreeSet<u64>,
+}
+
+thread_local! {
+    static REPLAYING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// The op being replayed ([`op_hash`]), for a panic hook to remember it.
+pub fn replaying() -> Option<u64> {
+    REPLAYING.with(std::cell::Cell::get)
+}
+
+/// An op's identity for [`Collab::skip`].
+pub fn op_hash(json: &str) -> u64 {
+    patch::hash(json)
 }
 
 /// The document every member starts from.
@@ -159,6 +178,7 @@ impl Collab {
             refused: None,
             max_op: usize::MAX,
             revert: false,
+            skip: BTreeSet::new(),
         }
     }
 
@@ -176,9 +196,9 @@ impl Collab {
         self.applied.is_empty()
     }
 
-    /// The edits made in `s` since the last call (and typing held long enough), as an update for
-    /// the others. `now` is a clock in milliseconds.
-    pub fn local(&mut self, s: &mut Session, now: f64) -> Option<Vec<u8>> {
+    /// The edits made in `s` since the last call (and typing held long enough), as updates for
+    /// the others, one per op (each fits `max_op`). `now` is a clock in milliseconds.
+    pub fn local(&mut self, s: &mut Session, now: f64) -> Vec<Vec<u8>> {
         let edits = s.journal.as_mut().map(std::mem::take).unwrap_or_default();
         let mut ops: Vec<Op> = vec![];
         for e in edits {
@@ -246,18 +266,14 @@ impl Collab {
             self.record(s, e, &mut ops);
         }
         self.mirror(s);
-        if ops.is_empty() {
-            return None;
-        }
-        let jsons: Vec<Arc<str>> = ops.iter().filter_map(|op| serde_json::to_string(op).ok()).map(Arc::from).collect();
-        Some(self.append(&jsons))
+        ops.iter().filter_map(|op| serde_json::to_string(op).ok()).map(|json| self.append(&json)).collect()
     }
 
     /// Applies the others' updates (and this member's own, which change nothing): `s` gets the
     /// shared document, its selection carried along.
-    pub fn remote(&mut self, s: &mut Session, updates: Vec<Vec<u8>>, now: f64) -> Option<Vec<u8>> {
+    pub fn remote(&mut self, s: &mut Session, updates: Vec<Vec<u8>>, now: f64) -> Vec<Vec<u8>> {
         // Held typing goes first: the shared document replaces the session's.
-        let mine = self.held.is_some().then(|| self.local(s, now + TYPING_HOLD_MS)).flatten();
+        let mine = if self.held.is_some() { self.local(s, now + TYPING_HOLD_MS) } else { vec![] };
         {
             let mut txn = self.ydoc.transact_mut();
             for bytes in updates {
@@ -376,13 +392,26 @@ impl Collab {
         }
     }
 
-    fn append(&mut self, ops: &[Arc<str>]) -> Vec<u8> {
+    fn append(&mut self, op: &str) -> Vec<u8> {
         let mut txn = self.ydoc.transact_mut();
         let sv = txn.state_vector();
-        for op in ops {
-            self.ops.push_back(&mut txn, op.as_ref());
-        }
+        self.ops.push_back(&mut txn, op);
         txn.encode_state_as_update_v1(&sv)
+    }
+
+    /// What this app's Yjs document holds, per Yjs client.
+    pub fn state_vector(&self) -> yrs::StateVector {
+        self.ydoc.transact().state_vector()
+    }
+
+    /// This run's Yjs client id (its items are the ones `local` returns).
+    pub fn yjs_client(&self) -> yrs::ClientID {
+        self.ydoc.client_id()
+    }
+
+    /// Everything this app holds that `sv` doesn't, as one update.
+    pub fn encode_since(&self, sv: &yrs::StateVector) -> Vec<u8> {
+        self.ydoc.transact().encode_state_as_update_v1(sv)
     }
 
     /// Brings the shared document in line with the ops' order and hands it to `s`.
@@ -422,7 +451,7 @@ impl Collab {
         }
         let new = self.state_at(self.applied.len());
         let old = std::mem::replace(&mut s.doc, new.clone());
-        let keep = |p: &Pos| rebase::map_pos(&old, &new, p, &|id| id);
+        let keep = |p: &Pos| rebase::map_pos(&old, &new, p, &|id| id).unwrap_or_else(|| new.start_of(StoryRef::Body));
         s.sel = Selection { anchor: keep(&s.sel.anchor), focus: keep(&s.sel.focus) };
         s.touch();
         s.clamp_selection();
@@ -441,6 +470,8 @@ impl Collab {
                 Some(op) => self.step(j, &op, doc),
                 None => doc,
             };
+            // Kept until the next prune: an op's rebase asks for neighbouring states.
+            self.states.insert(j + 1, doc.clone());
         }
         doc
     }
@@ -448,10 +479,18 @@ impl Collab {
     /// Replays op `j` on `doc`, carrying its positions through the ops before it that its author
     /// hadn't seen.
     fn step(&mut self, j: usize, op: &Op, doc: Document) -> Document {
+        let hash = self.applied.get(j).map(|json| op_hash(json));
+        if hash.is_some_and(|h| self.skip.contains(&h)) {
+            log::warn!("left out a shared `{}` that crashed this app before", op.c);
+            return doc;
+        }
         let unseen: Vec<usize> =
             (j.saturating_sub(WINDOW)..j).filter(|&i| self.ids.get(i).is_some_and(|(c, n)| op.k.get(c).is_none_or(|seen| *n >= *seen))).collect();
         let pairs: Vec<(Document, Document)> = unseen.iter().map(|&i| (self.state_at(i), self.state_at(i + 1))).collect();
-        replay(&mut self.replica, op, &pairs, doc)
+        REPLAYING.with(|r| r.set(hash));
+        let out = replay(&mut self.replica, op, &pairs, doc);
+        REPLAYING.with(|r| r.set(None));
+        out
     }
 
     /// Drops cached states no longer needed: the last `RECENT`, and the last `CHECKPOINTS`
@@ -482,7 +521,9 @@ pub fn replayable(c: &str, p: &Json) -> bool {
     let file = c.starts_with("file.") && c != "file.open";
     // An opened file travels as its bytes; its `path` only names it.
     let path = if c == "file.open" { p.get("data").is_none() } else { p.get("path").is_some() };
-    !file && !path && !matches!(c, "tools.macros" | "tools.recordMacro" | "edit.repeat")
+    // Spelling commands read this member's dictionary and ignored words.
+    let proofing = matches!(c, "review.applySuggestion" | "review.addToDictionary" | "review.ignoreAll" | "review.ignore");
+    !file && !path && !proofing && !matches!(c, "tools.macros" | "tools.recordMacro" | "edit.repeat")
 }
 
 /// The preferences that change what typing and editing do; the others (the view, proofing, local
@@ -490,8 +531,21 @@ pub fn replayable(c: &str, p: &Json) -> bool {
 const EDITING_PREFS: &[&str] = &["autocorrect", "typingReplacesSelection", "overtype", "detectLanguage"];
 
 /// The editing preferences that differ from the defaults, as an object (`null` when none do).
+/// AutoCorrect's lists (the member's own replacements and exceptions) never travel: an op that one
+/// of them changed doesn't replay the same, so its author shares it as a patch.
+const PRIVATE_LISTS: &[&str] = &["entries", "removed", "exceptions", "exceptionsRemoved", "initialCapsExceptions"];
+
+fn editing_prefs(p: &Prefs) -> Option<serde_json::Map<String, Json>> {
+    let Ok(Json::Object(mut o)) = serde_json::to_value(p) else { return None };
+    o.retain(|k, _| EDITING_PREFS.contains(&k.as_str()));
+    if let Some(Json::Object(ac)) = o.get_mut("autocorrect") {
+        ac.retain(|k, _| !PRIVATE_LISTS.contains(&k.as_str()));
+    }
+    Some(o)
+}
+
 fn prefs_diff(p: &Prefs) -> Json {
-    let (Ok(Json::Object(now)), Ok(Json::Object(def))) = (serde_json::to_value(p), serde_json::to_value(Prefs::default())) else { return Json::Null };
+    let (Some(now), Some(def)) = (editing_prefs(p), editing_prefs(&Prefs::default())) else { return Json::Null };
     let diff: serde_json::Map<String, Json> = now.into_iter().filter(|(k, v)| EDITING_PREFS.contains(&k.as_str()) && def.get(k) != Some(v)).collect();
     if diff.is_empty() { Json::Null } else { Json::Object(diff) }
 }
@@ -499,7 +553,16 @@ fn prefs_diff(p: &Prefs) -> Json {
 fn prefs_from(o: &Json) -> Prefs {
     let Some(o) = o.as_object() else { return Prefs::default() };
     let Ok(Json::Object(mut def)) = serde_json::to_value(Prefs::default()) else { return Prefs::default() };
-    def.extend(o.iter().filter(|(k, _)| EDITING_PREFS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())));
+    for (k, v) in o.iter().filter(|(k, _)| EDITING_PREFS.contains(&k.as_str())) {
+        // Object preferences (AutoCorrect) take the op's keys over the defaults; its lists stay
+        // the defaults.
+        match (def.get_mut(k), v) {
+            (Some(Json::Object(d)), Json::Object(v)) => {
+                d.extend(v.iter().filter(|(k, _)| !PRIVATE_LISTS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())))
+            }
+            _ => drop(def.insert(k.clone(), v.clone())),
+        }
+    }
     serde_json::from_value(Json::Object(def)).unwrap_or_default()
 }
 
@@ -527,9 +590,10 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
         StoryRef::Part(id) => StoryRef::Part(bump(id, &parts)),
         body => body,
     };
+    // `None`: an unseen op deleted the story the position is in.
     let map = |p: &Pos| {
         let p = Pos { story: story(p.story), ..p.clone() };
-        pairs.iter().fold(p, |p, (a, b)| rebase::map_pos(a, b, &p, &|id| id))
+        pairs.iter().try_fold(p, |p, (a, b)| rebase::map_pos(a, b, &p, &|id| id))
     };
     // Hostile input: paths of a sane depth only.
     if op.sel.anchor.path.0.len() > MAX_PATH || op.sel.focus.path.0.len() > MAX_PATH {
@@ -538,8 +602,9 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
     }
     if let Some(d) = &op.d {
         let at = |s: StoryRef, i: usize| {
-            let p = map(&Pos { story: s, path: Path::top(i), off: 0 });
-            (p.story, p.path.0.first().map_or(i, |i| *i as usize))
+            let s = story(s);
+            let i = pairs.iter().try_fold(i, |i, (a, b)| rebase::map_block(a, b, s, i))?;
+            Some((s, i))
         };
         return match patch::apply(&doc, d, &at) {
             Some(out) => out,
@@ -561,26 +626,22 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
     {
         o.insert("id".into(), bump(id, &comments).into());
     }
-    r.doc = doc;
-    r.touch();
-    r.sel = Selection { anchor: r.doc.clamp(&map(&op.sel.anchor)), focus: r.doc.clamp(&map(&op.sel.focus)) };
+    let (Some(anchor), Some(focus)) = (map(&op.sel.anchor), map(&op.sel.focus)) else {
+        log::info!("a shared `{}` did nothing: what it edited was deleted", op.c);
+        return doc;
+    };
+    // A fresh session for every op: nothing an earlier op left behind (or this member did) counts.
+    r.renew(doc);
+    r.sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
     r.pending = op.pp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
     r.prefs = prefs_from(&op.o);
-    r.clipboard = None;
-    r.painter = None;
-    r.math = None;
-    r.column = None;
-    r.also_selected.clear();
-    r.view = Default::default();
     wordcraft_engine::cmd::set_clock(Some(op.t));
     if let Err(e) = r.run(&op.c, &p) {
         log::info!("shared `{}` did nothing here: {e}", op.c);
     }
     wordcraft_engine::cmd::set_clock(None);
-    r.reset_history();
-    r.ui_requests.clear();
     r.doc.clone()
 }
 

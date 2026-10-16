@@ -44,9 +44,8 @@ fn pending(peers: &mut [&mut Peer]) -> Vec<Vec<u8>> {
 fn sync(peers: &mut [&mut Peer]) {
     let updates = pending(peers);
     for (s, c) in peers.iter_mut() {
-        if let Some(u) = c.remote(s, updates.clone(), LATER) {
-            panic!("held typing after local(): {} bytes", u.len());
-        }
+        let held = c.remote(s, updates.clone(), LATER);
+        assert!(held.is_empty(), "held typing after local(): {} updates", held.len());
     }
 }
 
@@ -210,9 +209,9 @@ fn typing_is_shared_as_one_op_once_it_pauses() {
     for (i, ch) in "hello".chars().enumerate() {
         at(&mut a.0, 0, i);
         run(&mut a.0, "text.insert", json!({"text": ch.to_string()}));
-        assert!(a.1.local(&mut a.0, i as f64 * 100.0).is_none(), "typing waits");
+        assert!(a.1.local(&mut a.0, i as f64 * 100.0).is_empty(), "typing waits");
     }
-    assert!(a.1.local(&mut a.0, 10_000.0).is_some());
+    assert!(!a.1.local(&mut a.0, 10_000.0).is_empty());
     // The start op (the blank document) and one typing op.
     assert!(a.1.applied.len() <= 2, "{:?}", a.1.applied);
     assert!(a.1.applied.last().unwrap().contains("hello"));
@@ -253,7 +252,7 @@ fn hostile_ops_are_refused() {
     let mut other = peer(9, "Mallory");
     for h in hostile {
         let json = serde_json::to_string(&h).unwrap();
-        let u = other.1.append(&[json.into()]);
+        let u = other.1.append(&json);
         a.1.remote(&mut a.0, vec![u], LATER);
     }
     assert!(patch::diff(&before, &a.0.doc).is_empty(), "{}", text(&a.0));
@@ -417,8 +416,85 @@ fn only_editing_preferences_travel() {
     let mut a = peer(1, "Ann");
     a.0.prefs.dictionaries_folder = Some("/home/ann/private".into());
     a.0.prefs.autocorrect.replace_text = false;
+    a.0.prefs.autocorrect.entries.push(("annsecret".into(), "Ann's private replacement".into()));
     start("Text", &mut [&mut a]);
     let all = a.1.applied.join("\n");
     assert!(!all.contains("/home/ann"), "{all}");
+    assert!(!all.contains("annsecret"), "AutoCorrect's own entries stay home: {all}");
     assert!(all.contains("replaceText"), "{all}");
+}
+
+#[test]
+fn a_patch_lands_in_the_right_block_while_others_edit() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Top", &mut [&mut a, &mut b]);
+    at(&mut a.0, 0, 3);
+    run(&mut a.0, "text.newParagraph", json!({}));
+    run(&mut a.0, "insert.table", json!({"rows": 1, "cols": 2}));
+    sync(&mut [&mut a, &mut b]);
+    // Ann pastes her own clipboard into the table's first cell (a patch); Bo types in the first
+    // paragraph meanwhile.
+    a.0.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 3) };
+    run(&mut a.0, "edit.copy", json!({}));
+    let cell = a.0.doc.para_paths(StoryRef::Body).into_iter().find(|p| p.0.len() == 4).unwrap();
+    a.0.sel = Selection::caret(Pos { story: StoryRef::Body, path: cell, off: 0 });
+    run(&mut a.0, "edit.paste", json!({}));
+    at(&mut b.0, 0, 0);
+    run(&mut b.0, "text.insert", json!({"text": "Bo "}));
+    sync(&mut [&mut a, &mut b]);
+    same_doc(&a.0, &b.0);
+    let t = text(&a.0);
+    assert!(t.starts_with("Bo Top"), "{t}");
+    assert_eq!(t.matches("Top").count(), 2, "the paste is in the table: {t}");
+}
+
+#[test]
+fn an_edit_in_a_story_someone_deleted_does_nothing() {
+    let mut a = Document::from_text("Body");
+    a.parts
+        .insert(4, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::TextBox, blocks: Document::from_text("Box").body, body: Default::default() });
+    let b = Document::from_text("Body");
+    let op: Op = serde_json::from_value(json!({
+        "i": [3, 0], "k": {}, "c": "text.insert", "p": {"text": "typed in the box"},
+        "sel": {"anchor": {"story": {"part": 4}, "path": [0], "off": 3}, "focus": {"story": {"part": 4}, "path": [0], "off": 3}},
+    }))
+    .unwrap();
+    let mut r = Session::new(base());
+    let out = replay(&mut r, &op, &[(a, b.clone())], b.clone());
+    assert!(patch::diff(&b, &out).is_empty(), "{}", out.plain_text(StoryRef::Body));
+}
+
+#[test]
+fn an_op_that_crashed_before_is_left_out() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Kept", &mut [&mut a, &mut b]);
+    at(&mut a.0, 0, 4);
+    run(&mut a.0, "text.insert", json!({"text": " and more"}));
+    let u = share(&mut a.0, &mut a.1);
+    let bad = a.1.applied.last().map(|j| op_hash(j)).unwrap();
+    b.1.skip.insert(bad);
+    b.1.remote(&mut b.0, u, LATER);
+    assert_eq!(text(&b.0), "Kept");
+    assert!(replaying().is_none(), "the marker is cleared after each op");
+}
+
+#[test]
+fn an_edit_nobody_stored_can_be_stored_by_whoever_has_it() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Shared", &mut [&mut a, &mut b]);
+    // What the messenger stored so far.
+    let stored = a.1.encode_since(&yrs::StateVector::default());
+    let stored_sv = a.1.state_vector();
+    // Ann's next edit reaches Bo only over the realtime channel; Ann leaves before storing it.
+    at(&mut a.0, 0, 6);
+    run(&mut a.0, "text.insert", json!({"text": " by Ann"}));
+    let realtime = share(&mut a.0, &mut a.1);
+    b.1.remote(&mut b.0, realtime, LATER);
+    assert_ne!(a.1.yjs_client(), b.1.yjs_client());
+    // Bo stores the items nobody stored; a member opening later gets the edit.
+    let orphans = b.1.encode_since(&stored_sv);
+    let mut late = peer(3, "Cy");
+    late.1.remote(&mut late.0, vec![stored, orphans], LATER);
+    same_doc(&a.0, &late.0);
+    assert_eq!(text(&late.0), "Shared by Ann");
 }

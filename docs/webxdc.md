@@ -39,12 +39,16 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
 `src/web/webxdc.rs`):
 
 - **Ops in a Yjs array.** Each change becomes an op appended to a `yrs` array; updates travel by
-  `sendUpdate` (stored by the messenger, replayed on every start; merged and sent at most every
-  3 s) and at once over the realtime channel. Every member replays the same op order from a blank
-  document on a replica session, rolling back to a cached state when an op lands earlier.
+  `sendUpdate` (stored by the messenger, replayed on every start; merged up to `sendUpdateMaxSize`
+  and sent at most every 3 s, and when the page is hidden) and at once over the realtime channel.
+  An update leaves the queue only once handed over; another member's edit that arrived only over
+  the realtime channel and nobody stored within 20 s (its author left) is stored by whoever has it.
+  Every member replays the same op order from a blank document, each op on a fresh replica session,
+  rolling back to a cached state (the last 256 ops, then checkpoints) when an op lands earlier.
 - **What an op carries.** The command and its parameters, the selection and the formatting waiting
   at the caret, the author (the chat name), the clock and the preferences that differ from the
-  defaults (AutoCorrect…). The author checks that replaying the op gives the same document; when
+  defaults (AutoCorrect options; a member's own AutoCorrect entries and exceptions stay on their
+  device, and spelling commands aren't shared). The author checks that replaying the op gives the same document; when
   it doesn't (the clipboard, the format painter, the view), the op carries the change instead: the
   changed paragraphs and tables and the changed fields, with a hash of what they replace. An
   opened file travels as its bytes; pictures as base64. Typing is held back for 0.7 s and shared
@@ -64,7 +68,8 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
   setting of the document, so it is on for everyone.
 - **Hostile ops** are refused: commands that touch files or name a path, macros, unknown commands,
   positions deeper than 64 levels, patches whose hashes don't match or that are oversized. An edit
-  too big for the messenger (`sendUpdateMaxSize`) is taken back with a message.
+  too big for the messenger (`sendUpdateMaxSize`) is taken back with a message. An op that crashes
+  the app while being replayed is remembered on that device and skipped from then on.
 
 Tests: `cargo test -p wordcraft-web` (a convergence fuzz with three members and shuffled delivery,
 `WORDCRAFT_COLLAB_SEEDS=100` to soak it; undo and redo per member; hostile ops; layout-dependent

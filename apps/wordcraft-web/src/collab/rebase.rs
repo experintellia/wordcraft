@@ -20,19 +20,45 @@ const TABLE: char = '\u{FFFC}';
 const MAX_DEPTH: usize = 8;
 
 /// Where `p`, a position in `a`, is in `b` (`a` after one change). `part` maps a part id of `a`
-/// to its id in `b` (parts created concurrently get other ids in the final order).
-pub fn map_pos(a: &Document, b: &Document, p: &Pos, part: &dyn Fn(u32) -> u32) -> Pos {
+/// to its id in `b` (parts created concurrently get other ids in the final order). `None` when
+/// the change deleted the story `p` is in (a header, a note, a text box).
+pub fn map_pos(a: &Document, b: &Document, p: &Pos, part: &dyn Fn(u32) -> u32) -> Option<Pos> {
     let story = match p.story {
         StoryRef::Body => StoryRef::Body,
         StoryRef::Part(id) => StoryRef::Part(part(id)),
     };
-    let mapped = match (a.story(p.story), b.story(story)) {
-        (Some(x), Some(y)) => map_in(x, y, &p.path.0, p.off, 0).map(|(path, off)| Pos { story, path: Path(path), off }),
-        // A story this change didn't touch (made by a later op): as it was.
-        (None, None) => return Pos { story, ..p.clone() },
-        _ => None,
+    match (a.story(p.story), b.story(story)) {
+        (Some(x), Some(y)) => {
+            let mapped = map_in(x, y, &p.path.0, p.off, 0).map(|(path, off)| Pos { story, path: Path(path), off });
+            Some(b.clamp(&mapped.unwrap_or_else(|| Pos { story, ..p.clone() })))
+        }
+        // A story this change didn't touch (made by a later op, or by none): as it was.
+        (None, None) => Some(Pos { story, ..p.clone() }),
+        (Some(_), None) => None,
+        (None, Some(_)) => Some(b.clamp(&Pos { story, ..p.clone() })),
+    }
+}
+
+/// Where block `i` of `story` in `a` is in `b`: before the changed run it stays, after it moves
+/// by the run's change in length, inside it goes to the run's start. `None` when the change
+/// deleted the story.
+pub fn map_block(a: &Document, b: &Document, story: StoryRef, i: usize) -> Option<usize> {
+    let (x, y) = match (a.story(story), b.story(story)) {
+        (Some(x), Some(y)) => (x, y),
+        (None, None) => return Some(i),
+        (Some(_), None) => return None,
+        (None, Some(_)) => return Some(i),
     };
-    b.clamp(&mapped.unwrap_or_else(|| Pos { story, ..p.clone() }))
+    let prefix = x.iter().zip(y).take_while(|(p, q)| same(p, q)).count();
+    let max_suffix = x.len().min(y.len()) - prefix;
+    let suffix = x.iter().rev().zip(y.iter().rev()).take(max_suffix).take_while(|(p, q)| same(p, q)).count();
+    Some(if i < prefix {
+        i
+    } else if i >= x.len().saturating_sub(suffix) {
+        (i + y.len()).saturating_sub(x.len())
+    } else {
+        prefix
+    })
 }
 
 fn same(x: &Arc<Block>, y: &Arc<Block>) -> bool {
@@ -210,7 +236,7 @@ mod tests {
     }
 
     fn map(a: &Document, b: &Document, p: Pos) -> (Vec<u32>, usize) {
-        let q = map_pos(a, b, &p, &|id| id);
+        let q = map_pos(a, b, &p, &|id| id).unwrap();
         (q.path.0, q.off)
     }
 
@@ -255,7 +281,16 @@ mod tests {
         assert_eq!(map(&a, &b, at(0, 6)), (vec![0], 2));
         // A story neither document has is left alone (a later op makes it).
         let p = Pos { story: StoryRef::Part(9), path: Path::top(0), off: 0 };
-        assert_eq!(map_pos(&a, &b, &p, &|id| id + 1).story, StoryRef::Part(10));
+        assert_eq!(map_pos(&a, &b, &p, &|id| id + 1).unwrap().story, StoryRef::Part(10));
+        // A story the change deleted: nowhere.
+        let mut c = a.clone();
+        c.parts.insert(4, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::TextBox, blocks: a.body.clone(), body: Default::default() });
+        let in_part = Pos { story: StoryRef::Part(4), path: Path::top(0), off: 0 };
+        assert!(map_pos(&c, &a, &in_part, &|id| id).is_none());
+        // Block indices map without clamping: past the end stays past the end.
+        assert_eq!(map_block(&a, &b, StoryRef::Body, 1), Some(1));
+        let longer = doc("abcdef\nx\ny");
+        assert_eq!(map_block(&a, &longer, StoryRef::Body, 1), Some(3), "the end of the story moves with it");
     }
 
     #[test]
@@ -276,7 +311,7 @@ mod tests {
         let b = doc("y");
         for path in [vec![], vec![99], vec![0, 5, 5, 5], vec![u32::MAX, 0, 0, 0, 0, 0, 0], vec![1, 0, 0, 0]] {
             let p = Pos { story: StoryRef::Body, path: Path(path), off: usize::MAX };
-            let q = map_pos(&a, &b, &p, &|id| id);
+            let q = map_pos(&a, &b, &p, &|id| id).unwrap();
             assert!(b.para_at(&q).is_some());
         }
     }

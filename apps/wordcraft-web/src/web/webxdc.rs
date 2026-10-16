@@ -48,6 +48,11 @@ const MAX_PATH: usize = 64;
 const DEFAULT_MAX_UPDATE: usize = 128_000;
 /// Where this member and device's client id is kept between runs.
 const CLIENT_KEY: &str = "wordcraft-client";
+/// Where the ops that crashed this app while replaying are kept ([`Collab::skip`]).
+const BAD_OPS_KEY: &str = "wordcraft-bad-ops";
+/// An edit another member sent only over the realtime channel and nobody stored after this long
+/// (ms; its author left too soon) is stored by whoever has it.
+const ORPHAN_GRACE_MS: f64 = 20_000.0;
 
 /// `window.webxdc`, when the page runs as a webxdc app (`webxdc.js` loaded).
 pub fn api() -> Option<JsValue> {
@@ -141,14 +146,20 @@ pub struct Shared {
     collab: Collab,
     ctx: egui::Context,
     me: String,
-    /// Received since the last frame.
-    received: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// Received since the last frame, and whether the messenger had stored it.
+    received: Rc<RefCell<Vec<(Vec<u8>, bool)>>>,
     /// The messenger has handed over the updates it stored.
     replayed: Rc<Cell<bool>>,
     loading: bool,
-    /// Updates not yet stored, and when the last went.
-    unsent: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// This member's updates (one op each) not yet stored, and when they last were.
+    unsent: std::collections::VecDeque<Vec<u8>>,
     stored_at: f64,
+    /// What the messenger has stored, per Yjs client, and since when other members' items have
+    /// waited unstored here.
+    stored: yrs::StateVector,
+    lagging: HashMap<yrs::ClientID, f64>,
+    /// `sendUpdateMaxSize`.
+    max_update: usize,
     heard: Rc<RefCell<Vec<Presence>>>,
     /// The other members online, by `selfAddr`, with when they were last heard.
     peers: HashMap<String, (Presence, f64)>,
@@ -171,6 +182,8 @@ impl Shared {
             .filter(|v| *v > 0.0)
             .map_or(DEFAULT_MAX_UPDATE, |v| v as usize);
         collab.max_op = (max / 4 * 3).saturating_sub(2_000);
+        collab.skip = bad_ops();
+        remember_bad_ops();
         app.set_loading(true);
         let mut shared = Shared {
             api,
@@ -181,8 +194,11 @@ impl Shared {
             received: Rc::default(),
             replayed: Rc::default(),
             loading: true,
-            unsent: Rc::default(),
+            unsent: Default::default(),
             stored_at: 0.0,
+            stored: Default::default(),
+            lagging: HashMap::new(),
+            max_update: max,
             heard: Rc::default(),
             peers: HashMap::new(),
             sent: None,
@@ -198,7 +214,7 @@ impl Shared {
         let on_update = Closure::<dyn FnMut(JsValue)>::new(move |update: JsValue| {
             let y = Reflect::get(&update, &"payload".into()).and_then(|p| Reflect::get(&p, &"y".into())).ok().and_then(|y| y.as_string());
             if let Some(bytes) = y.as_deref().and_then(base64_decode) {
-                received.borrow_mut().push(bytes);
+                received.borrow_mut().push((bytes, true));
                 repaint.request_repaint();
             }
         });
@@ -228,7 +244,7 @@ impl Shared {
             let on_data = Closure::<dyn FnMut(JsValue)>::new(move |data: JsValue| {
                 let Some(data) = data.dyn_ref::<Uint8Array>().map(Uint8Array::to_vec) else { return };
                 match data.split_first() {
-                    Some((&TAG_UPDATE, update)) => received.borrow_mut().push(update.to_vec()),
+                    Some((&TAG_UPDATE, update)) => received.borrow_mut().push((update.to_vec(), false)),
                     Some((&TAG_PRESENCE, json)) => match serde_json::from_slice(json) {
                         Ok(presence) => heard.borrow_mut().push(presence),
                         Err(_) => return,
@@ -242,14 +258,6 @@ impl Shared {
                 self.channel = Some(channel);
             }
         }
-        // Leaving the page stores what hasn't been yet.
-        let (api, unsent) = (self.api.clone(), self.unsent.clone());
-        let on_hide = Closure::<dyn FnMut()>::new(move || store(&api, &mut unsent.borrow_mut(), None));
-        if let Some(w) = web_sys::window()
-            && w.add_event_listener_with_callback("pagehide", on_hide.as_ref().unchecked_ref()).is_ok()
-        {
-            on_hide.forget();
-        }
     }
 
     /// Before the frame: applies what the others sent.
@@ -257,8 +265,13 @@ impl Shared {
         self.hear(app);
         let received = std::mem::take(&mut *self.received.borrow_mut());
         if !received.is_empty() {
-            let mine = self.collab.remote(&mut app.session, received, js_sys::Date::now());
-            if let Some(update) = mine {
+            for (bytes, stored) in &received {
+                if *stored {
+                    note_stored(&mut self.stored, bytes);
+                }
+            }
+            let updates = received.into_iter().map(|(bytes, _)| bytes).collect();
+            for update in self.collab.remote(&mut app.session, updates, js_sys::Date::now()) {
                 self.send(update);
             }
         }
@@ -275,27 +288,94 @@ impl Shared {
             return;
         }
         let now = js_sys::Date::now();
-        if let Some(update) = self.collab.local(&mut app.session, now) {
+        for update in self.collab.local(&mut app.session, now) {
             self.send(update);
         }
         if let Some(why) = self.collab.refused.take() {
             app.status(why);
         }
         self.after_change(app);
-        if !self.unsent.borrow().is_empty() {
-            if now - self.stored_at >= STORE_EVERY_MS {
-                self.stored_at = now;
-                let name = self.collab.file_name();
-                let document = (name != self.named).then(|| name.clone()).flatten();
-                self.named = name;
-                store(&self.api, &mut self.unsent.borrow_mut(), document);
-            } else {
-                self.ctx.request_repaint_after(std::time::Duration::from_millis(STORE_EVERY_MS as u64));
-            }
+        if now - self.stored_at >= STORE_EVERY_MS {
+            self.stored_at = now;
+            self.store(now);
+        } else if !self.unsent.is_empty() {
+            self.ctx.request_repaint_after(std::time::Duration::from_millis(STORE_EVERY_MS as u64));
         }
         // Held typing is shared once it pauses.
         self.ctx.request_repaint_after(std::time::Duration::from_millis(800));
         self.tell(&app.session);
+    }
+
+    /// The page is going away (hidden, closed): typing held back and everything unsent goes now.
+    pub fn flush(&mut self, app: &mut WordApp) {
+        if self.loading {
+            return;
+        }
+        let now = js_sys::Date::now();
+        // A clock past the hold shares held typing.
+        for update in self.collab.local(&mut app.session, now + 60_000.0) {
+            self.send(update);
+        }
+        self.store(now);
+    }
+
+    /// Stores this member's unsent updates, merged into as few `sendUpdate`s as fit the
+    /// messenger's limit (each leaves the queue only once handed over), then other members' items
+    /// nobody stored ([`ORPHAN_GRACE_MS`]).
+    fn store(&mut self, now: f64) {
+        let name = self.collab.file_name();
+        let mut document = (name != self.named).then(|| name.clone()).flatten();
+        self.named = name;
+        while !self.unsent.is_empty() {
+            // As many queued updates as fit, at least one (an op fits `max_op`).
+            let mut take = 1;
+            let mut merged = self.unsent.front().cloned().unwrap_or_default();
+            while take < self.unsent.len() {
+                let candidate = match yrs::merge_updates_v1(self.unsent.iter().take(take + 1).map(Vec::as_slice)) {
+                    Ok(u) => u,
+                    Err(_) => break,
+                };
+                if payload_size(&candidate) > self.max_update {
+                    break;
+                }
+                merged = candidate;
+                take += 1;
+            }
+            if !send_update(&self.api, &merged, document.take()) {
+                break;
+            }
+            note_stored(&mut self.stored, &merged);
+            self.unsent.drain(..take);
+        }
+        // Others' items held here but stored by nobody for a while.
+        let have = self.collab.state_vector();
+        let me = self.collab.yjs_client();
+        let mut due = vec![];
+        for (client, clock) in have.iter() {
+            if *client == me || *clock <= self.stored.get(client) {
+                self.lagging.remove(client);
+                continue;
+            }
+            let since = *self.lagging.entry(*client).or_insert(now);
+            if now - since >= ORPHAN_GRACE_MS {
+                due.push(*client);
+            }
+        }
+        if due.is_empty() {
+            return;
+        }
+        let mut from = yrs::StateVector::default();
+        for (client, clock) in have.iter() {
+            from.set_max(*client, if due.contains(client) { self.stored.get(client) } else { *clock });
+        }
+        let orphans = self.collab.encode_since(&from);
+        // ponytail: orphans bigger than one update stay unstored; split them per client if seen.
+        if payload_size(&orphans) <= self.max_update && send_update(&self.api, &orphans, None) {
+            note_stored(&mut self.stored, &orphans);
+            for client in due {
+                self.lagging.remove(&client);
+            }
+        }
     }
 
     /// Opening a file replaces everyone's document: the app asks first once there is one.
@@ -311,7 +391,7 @@ impl Shared {
         {
             log::warn!("realtime send failed: {e:?}");
         }
-        self.unsent.borrow_mut().push(update);
+        self.unsent.push_back(update);
     }
 
     /// Takes in where the others are, and drops those gone quiet.
@@ -367,26 +447,78 @@ impl Shared {
     }
 }
 
-/// Stores the queued updates as one (merged), naming the document when `document` says so.
-fn store(api: &JsValue, unsent: &mut Vec<Vec<u8>>, document: Option<String>) {
-    if unsent.is_empty() {
-        return;
-    }
-    let update = match yrs::merge_updates_v1(unsent.iter().map(Vec::as_slice)) {
-        Ok(u) => u,
-        Err(e) => {
-            log::warn!("couldn't merge shared updates: {e}");
-            return;
-        }
-    };
-    unsent.clear();
-    let mut fields = vec![("payload", object(&[("y", base64_encode(&update).into())]))];
+/// `sendUpdate`s an update (base64 in `{y}`), naming the document when `document` says so.
+/// Whether the messenger took it.
+fn send_update(api: &JsValue, update: &[u8], document: Option<String>) -> bool {
+    let mut fields = vec![("payload", object(&[("y", base64_encode(update).into())]))];
     if let Some(name) = document {
         let stem = std::path::Path::new(&name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().to_string());
         fields.push(("document", stem.into()));
     }
-    if let Err(e) = call(api, "sendUpdate", &[object(&fields), "".into()]) {
-        log::error!("couldn't share an edit: {e:?}");
+    match call(api, "sendUpdate", &[object(&fields), "".into()]) {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("couldn't share an edit: {e:?}");
+            false
+        }
+    }
+}
+
+/// The size of an update's `sendUpdate` payload: base64 plus the JSON around it.
+fn payload_size(update: &[u8]) -> usize {
+    update.len().div_ceil(3) * 4 + 64
+}
+
+/// Records that the messenger stores what `update` holds.
+fn note_stored(stored: &mut yrs::StateVector, update: &[u8]) {
+    use yrs::updates::decoder::Decode as _;
+    let Ok(sv) = yrs::encode_state_vector_from_update_v1(update).and_then(|b| yrs::StateVector::decode_v1(&b)) else { return };
+    for (client, clock) in sv.iter() {
+        stored.set_max(*client, *clock);
+    }
+}
+
+/// The ops that crashed this app while replaying, as kept in the page's storage.
+fn bad_ops() -> std::collections::BTreeSet<u64> {
+    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+    let kept = storage.and_then(|s| s.get_item(BAD_OPS_KEY).ok().flatten()).unwrap_or_default();
+    kept.split(',').filter_map(|h| h.parse().ok()).collect()
+}
+
+/// A panic aborts the web app: before it does, remember the op being replayed, so the next start
+/// leaves it out ([`Collab::skip`]).
+fn remember_bad_ops() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(hash) = crate::collab::replaying()
+            && let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+        {
+            let mut kept = storage.get_item(BAD_OPS_KEY).ok().flatten().unwrap_or_default();
+            if !kept.is_empty() {
+                kept.push(',');
+            }
+            kept.push_str(&hash.to_string());
+            let _ = storage.set_item(BAD_OPS_KEY, &kept);
+        }
+        previous(info);
+    }));
+}
+
+/// Shares what is unshared when the page is hidden or goes away (a messenger closing the app).
+pub fn flush_on_hide(app: Rc<RefCell<WordApp>>, shared: Rc<RefCell<Shared>>) {
+    let flush = Closure::<dyn FnMut()>::new(move || {
+        if let (Ok(mut app), Ok(mut shared)) = (app.try_borrow_mut(), shared.try_borrow_mut()) {
+            shared.flush(&mut app);
+        }
+    });
+    let Some(window) = web_sys::window() else { return };
+    let mut added = window.add_event_listener_with_callback("pagehide", flush.as_ref().unchecked_ref()).is_ok();
+    if let Some(document) = window.document() {
+        added |= document.add_event_listener_with_callback("visibilitychange", flush.as_ref().unchecked_ref()).is_ok();
+    }
+    if added {
+        // Lives as long as the page.
+        flush.forget();
     }
 }
 
