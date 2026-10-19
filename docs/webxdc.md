@@ -1,6 +1,6 @@
 # WordCraft as a webxdc app
 
-_Last updated: 2026-10-16 (shared editing)_
+_Last updated: 2026-10-19 (character ids for concurrent typing)_
 
 This fork (`experintellia/wordcraft`, branch `webxdc`) ships WordCraft as a [webxdc](https://webxdc.org/)
 app: one `.xdc` file sent into a Delta Chat (or other messenger) chat, run inside the messenger,
@@ -53,11 +53,14 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
   changed paragraphs and tables and the changed fields, with a hash of what they replace. An
   opened file travels as its bytes; pictures as base64. Typing is held back for 0.7 s and shared
   as one op.
-- **Concurrent edits merge.** An op records how many ops of each member its author had seen. On
-  replay its positions are carried through the ops before it that its author hadn't seen, mapped
-  from the documents themselves (unchanged blocks are the same `Arc`; a changed run's text is
-  aligned with Myers' diff). Two members typing in the same paragraph both land where they meant;
-  at the same spot the log order decides. Parts and comments made concurrently get other ids in
+- **Concurrent edits merge.** Every character has an identity: the op that typed it and which of
+  its characters it was (paragraph marks, tables and cells too; `collab/ids.rs`). An op's
+  selection travels as the characters just before its ends, so on replay it lands just after
+  them, whatever the author hadn't seen; two members typing at the same spot each keep their own
+  words together, in log order. Ids are worked out from each op's documents, the same way on every
+  member: typing, Backspace and Delete at the op's selection exactly, anything else by aligning
+  the changed text (Myers' diff). When the character is gone, the position is carried through the
+  ops its author hadn't seen, mapped from the documents themselves. Parts and comments made concurrently get other ids in
   the final order, and ids an op names are moved past them.
 - **Undo takes back only your own changes**: Undo finds what your step left in the document as it
   is now and puts back what was there before; refused (with a message) when someone changed one of

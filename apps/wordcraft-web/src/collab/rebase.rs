@@ -135,7 +135,7 @@ fn within(a: &str, b: &str, g: usize) -> usize {
 
 /// The characters `a` and `b` have in common, as index pairs in order (Myers' O(ND) diff), or
 /// `None` past [`MAX_EDITS`] edits.
-fn lcs(a: &[char], b: &[char]) -> Option<Vec<(usize, usize)>> {
+pub(super) fn lcs(a: &[char], b: &[char]) -> Option<Vec<(usize, usize)>> {
     let (n, m) = (a.len() as isize, b.len() as isize);
     let max = MAX_EDITS.min(n + m);
     let off = max + 1;
