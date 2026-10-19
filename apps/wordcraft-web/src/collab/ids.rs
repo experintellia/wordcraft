@@ -189,7 +189,8 @@ fn flat(blocks: &[Arc<Block>]) -> Vec<char> {
                 out.extend(p.text.chars());
                 out.push('\n');
             }
-            Block::Table(_) => out.push('\u{FFFC}'),
+            // A private-use character: U+FFFC stands for pictures in paragraph text.
+            Block::Table(_) => out.push('\u{F8FF}'),
         }
     }
     out
@@ -283,13 +284,24 @@ fn splice(oc: &[char], nc: &[char], hint: &[usize]) -> Option<Vec<(usize, usize)
     }
     tries.into_iter().find_map(|(s, e)| {
         let ne = usize::try_from(e as isize + d).ok().filter(|ne| *ne >= s)?;
-        (oc.get(..s)? == nc.get(..s)? && oc.get(e..)? == nc.get(ne..)?)
-            .then(|| (0..s).map(|i| (i, i)).chain((e..oc.len()).map(|i| (i, i + ne - e))).collect())
+        if oc.get(..s)? != nc.get(..s)? || oc.get(e..)? != nc.get(ne..)? {
+            return None;
+        }
+        // Inside the splice, what both keep at its ends (formatting keeps every character).
+        let (om, nm) = (oc.get(s..e)?, nc.get(s..ne)?);
+        let p = om.iter().zip(nm).take_while(|(x, y)| x == y).count();
+        let q = om.iter().skip(p).rev().zip(nm.iter().skip(p).rev()).take_while(|(x, y)| x == y).count();
+        let kept = (0..s + p).map(|i| (i, i)).chain((1..=q).map(|i| (e - i, ne - i)));
+        Some(kept.chain((e..oc.len()).map(|i| (i, i + ne - e))).collect())
     })
 }
 
-/// The position at the start of block `i` (into a table's first cell).
+/// The position at the start of block `i`: the first paragraph from there (a table someone put
+/// there meanwhile doesn't take it in), into a table's first cell only when no paragraph follows.
 fn start_of(blocks: &[Arc<Block>], i: usize, depth: usize) -> Option<(Vec<u32>, usize)> {
+    if let Some(j) = blocks.get(i..).and_then(|r| r.iter().position(|b| b.as_para().is_some())) {
+        return Some((vec![(i + j) as u32], 0));
+    }
     match &**blocks.get(i)? {
         Block::Para(_) => Some((vec![i as u32], 0)),
         Block::Table(t) if depth < MAX_DEPTH => {
@@ -416,6 +428,30 @@ mod tests {
         let n3 = n2.next(&c, &b, None, (3, 0));
         assert_eq!(at(&n3, &b, after_d), (vec![1], 1));
         assert_eq!(at(&n3, &b, None), (vec![0], 0));
+    }
+
+    #[test]
+    fn formatting_keeps_ids_and_a_new_table_doesnt_take_a_paragraph_start() {
+        let a = doc("hello\ndef");
+        let ids = Ids::fresh(&a, (0, 0));
+        // Bold on "hello" (the text the same): every character keeps its id.
+        let pairs = splice(&flat(&a.body), &flat(&a.body), &[0, 5]).unwrap();
+        assert_eq!(pairs, (0..10).map(|i| (i, i)).collect::<Vec<_>>());
+        // Typing over "ll": "he" and "o" keep theirs.
+        let pairs = splice(&"hello".chars().collect::<Vec<_>>(), &"heXo".chars().collect::<Vec<_>>(), &[2, 4]).unwrap();
+        assert_eq!(pairs, vec![(0, 0), (1, 1), (4, 3)]);
+        // A table put before "def": the start of "def" stays the start of "def".
+        let start_def = ids.anchor(&a, &Pos::body(1, 0)).unwrap();
+        let mut t = a.clone();
+        let table = Document::from_text("x").body[0].clone();
+        let table = Arc::new(Block::Table(wordcraft_doc::Table {
+            rows: vec![wordcraft_doc::Row { cells: vec![wordcraft_doc::Cell { blocks: vec![table], ..Default::default() }], ..Default::default() }],
+            ..Default::default()
+        }));
+        t.body.insert(1, table);
+        let n = ids.next(&a, &t, None, (2, 0));
+        assert_eq!(at(&n, &t, start_def), (vec![2], 0));
+        assert_eq!(at(&n, &t, None), (vec![0], 0));
     }
 
     #[test]

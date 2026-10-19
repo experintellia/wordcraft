@@ -379,7 +379,7 @@ impl Collab {
             self.revert = true;
             return;
         }
-        let prev = self.states.get(&self.applied.len()).cloned().unwrap_or_else(|| State { doc: before.clone(), ids: Ids::fresh(&before, op.i) });
+        let prev = self.state_at(self.applied.len());
         let sel = op.d.is_none().then(|| Selection { anchor: before.clamp(&op.sel.anchor), focus: before.clamp(&op.sel.focus) });
         if let Some(label) = step {
             push(&mut self.undo, Step { label, before, after: after.clone() });
