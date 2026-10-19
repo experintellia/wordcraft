@@ -571,3 +571,20 @@ fn timing_a_late_joiner_replays_a_long_log() {
     eprintln!("replayed {} ops in {:?}", a.1.applied.len(), t.elapsed());
     same_doc(&a.0, &late.0);
 }
+
+/// Ann puts a table at the start of a paragraph while Bo types there: whichever order the log
+/// gives, Bo's text stays in the paragraph, not in the table.
+#[test]
+fn a_table_put_where_someone_types_doesnt_take_the_typing() {
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("abc\ndef", &mut [&mut a, &mut b]);
+        at(&mut a.0, 1, 0);
+        run(&mut a.0, "insert.table", json!({"rows": 1, "cols": 1}));
+        at(&mut b.0, 1, 0);
+        run(&mut b.0, "text.insert", json!({"text": "X"}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        assert!(text(&a.0).ends_with("Xdef"), "{:?}", text(&a.0));
+    }
+}
