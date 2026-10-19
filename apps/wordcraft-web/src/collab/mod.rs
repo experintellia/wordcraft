@@ -13,10 +13,12 @@
 //! [`patch::Patch`] (the changed paragraphs or tables and fields). Opening a file is a command
 //! with the file's bytes.
 //!
-//! **Concurrent edits merge.** An op records which ops its author had seen (per member, how many).
-//! Replaying it, its positions are carried through the ops that come before it but its author
-//! hadn't seen ([`rebase`]), so two members typing in the same paragraph both land where they
-//! meant; at the same spot the log order decides. Parts (headers, notes, text boxes) and comments
+//! **Concurrent edits merge.** Every character has an identity ([`ids`]), and an op's selection
+//! travels as the characters just before its ends: replayed, it lands just after them, whatever
+//! its author hadn't seen, so two members typing at the same spot each keep their words together.
+//! When such a character is gone, its positions are carried through the ops that come before it
+//! but its author hadn't seen ([`rebase`]; an op records how many ops of each member its author
+//! had seen). Parts (headers, notes, text boxes) and comments
 //! made concurrently get other ids in the final order, and ids an op names are moved past them.
 //! All of it is deterministic, so every member ends with the same document.
 //!
@@ -24,6 +26,7 @@
 //! and after it; Undo finds what the step left in the document as it is now and puts back what was
 //! there before, refused when someone changed one of the same paragraphs, tables or fields since.
 
+pub mod ids;
 pub mod patch;
 pub mod rebase;
 
@@ -38,6 +41,7 @@ use wordcraft_engine::{Edit, Prefs, Selection, Session};
 use yrs::updates::decoder::Decode as _;
 use yrs::{Any, Array as _, ArrayRef, Doc, Out, ReadTxn as _, Transact as _, Update};
 
+use ids::Ids;
 use patch::Patch;
 
 /// Ops further back than this are taken as seen by every later op.
@@ -86,6 +90,30 @@ pub struct Op {
     /// The change, for an op that can't run again elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     d: Option<Patch>,
+    /// The selection's anchor and focus as the characters just before them ([`ids`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<[Option<ids::Id>; 2]>,
+}
+
+/// The document after some ops, and its characters' ids.
+#[derive(Clone)]
+struct State {
+    doc: Document,
+    ids: Ids,
+}
+
+impl State {
+    fn base() -> State {
+        let doc = base();
+        let ids = Ids::fresh(&doc, (0, 0));
+        State { doc, ids }
+    }
+
+    /// The state `op` left, `doc`; `sel` is where it ran.
+    fn next(&self, op: &Op, doc: Document, sel: Option<&Selection>) -> State {
+        let ids = self.ids.next(&self.doc, &doc, sel, op.i);
+        State { doc, ids }
+    }
 }
 
 /// One of this member's changes, for their undo and redo.
@@ -112,7 +140,7 @@ pub struct Collab {
     /// Per client, how many of its ops are replayed.
     counts: BTreeMap<u64, u32>,
     /// The document after n ops.
-    states: BTreeMap<usize, Document>,
+    states: BTreeMap<usize, State>,
     /// Runs the ops, renewed for each one ([`Session::renew`]).
     replica: Session,
     /// This member and device.
@@ -168,7 +196,7 @@ impl Collab {
             applied: vec![],
             ids: vec![],
             counts: BTreeMap::new(),
-            states: [(0, base())].into(),
+            states: [(0, State::base())].into(),
             replica,
             client,
             expected: base(),
@@ -311,7 +339,7 @@ impl Collab {
         let label = if e.id == "text.insert" { "Typing" } else { s.registry.get(&e.id).map_or("Edit", |c| c.label) };
         let label = label.trim_end_matches('…').to_string();
         let mut op = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
-        let same = replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, &op, &[], e.before.clone()), &e.after).is_empty();
+        let same = replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, &op, &[], None, e.before.clone()).0, &e.after).is_empty();
         if !same {
             let d = patch::diff(&e.before, &e.after);
             if d.is_empty() {
@@ -331,12 +359,13 @@ impl Collab {
             k: self.counts.clone(),
             c: c.into(),
             p,
-            sel,
             pp,
             a: s.author.clone(),
             ai: s.initials.clone(),
             t,
             o: prefs_diff(&s.prefs),
+            y: self.states.get(&self.applied.len()).and_then(|st| Some([st.ids.anchor(&st.doc, &sel.anchor)?, st.ids.anchor(&st.doc, &sel.focus)?])),
+            sel,
             d,
         }
     }
@@ -350,6 +379,8 @@ impl Collab {
             self.revert = true;
             return;
         }
+        let prev = self.state_at(self.applied.len());
+        let sel = op.d.is_none().then(|| Selection { anchor: before.clamp(&op.sel.anchor), focus: before.clamp(&op.sel.focus) });
         if let Some(label) = step {
             push(&mut self.undo, Step { label, before, after: after.clone() });
             self.redo.clear();
@@ -357,7 +388,7 @@ impl Collab {
         self.applied.push(json.into());
         self.ids.push(op.i);
         *self.counts.entry(op.i.0).or_default() += 1;
-        self.states.insert(self.applied.len(), after.clone());
+        self.states.insert(self.applied.len(), prev.next(&op, after.clone(), sel.as_ref()));
         self.prune();
         self.expected = after;
         ops.push(op);
@@ -382,7 +413,7 @@ impl Collab {
                 continue;
             };
             let op = self.op(&e.id, Json::Null, e.sel.clone(), None, s, e.time, Some(d));
-            let after = replay(&mut self.replica, &op, &[], now.clone());
+            let after = replay(&mut self.replica, &op, &[], None, now.clone()).0;
             if !patch::diff(&now, &after).is_empty() {
                 self.commit(op, now, after.clone(), None, ops);
                 s.doc = after;
@@ -424,6 +455,7 @@ impl Collab {
         if same == self.applied.len() && same == log.len() {
             return;
         }
+        let old_state = self.states.get(&self.applied.len()).cloned();
         self.applied.truncate(same);
         self.ids.truncate(same);
         self.states.retain(|n, _| *n <= same);
@@ -438,20 +470,29 @@ impl Collab {
             self.applied.push(json.clone());
             self.ids.push(id);
             *self.counts.entry(id.0).or_default() += 1;
-            let doc = self.state_at(n);
+            let state = self.state_at(n);
             let next = match op {
-                Some(op) => self.step(n, &op, doc),
+                Some(op) => self.step(n, &op, state),
                 None => {
                     log::warn!("skipped an unreadable shared op");
-                    doc
+                    state
                 }
             };
             self.states.insert(n + 1, next);
             self.prune();
         }
-        let new = self.state_at(self.applied.len());
+        let state = self.state_at(self.applied.len());
+        let new = state.doc.clone();
         let old = std::mem::replace(&mut s.doc, new.clone());
-        let keep = |p: &Pos| rebase::map_pos(&old, &new, p, &|id| id).unwrap_or_else(|| new.start_of(StoryRef::Body));
+        // The selection stays after the character it was after; else where the text says.
+        let old_ids = old_state.filter(|st| patch::diff(&st.doc, &old).is_empty()).map(|st| st.ids);
+        let keep = |p: &Pos| {
+            old_ids
+                .as_ref()
+                .and_then(|ids| state.ids.find(&new, p.story, ids.anchor(&old, p)?))
+                .or_else(|| rebase::map_pos(&old, &new, p, &|id| id))
+                .unwrap_or_else(|| new.start_of(StoryRef::Body))
+        };
         s.sel = Selection { anchor: keep(&s.sel.anchor), focus: keep(&s.sel.focus) };
         s.touch();
         s.clamp_selection();
@@ -460,37 +501,37 @@ impl Collab {
     }
 
     /// The document after `n` ops: cached, or replayed from the nearest cached state before it.
-    fn state_at(&mut self, n: usize) -> Document {
-        let (from, mut doc) = match self.states.range(..=n).next_back() {
-            Some((k, d)) => (*k, d.clone()),
-            None => (0, base()),
+    fn state_at(&mut self, n: usize) -> State {
+        let (from, mut state) = match self.states.range(..=n).next_back() {
+            Some((k, st)) => (*k, st.clone()),
+            None => (0, State::base()),
         };
         for j in from..n.min(self.applied.len()) {
-            doc = match self.applied.get(j).and_then(|json| serde_json::from_str::<Op>(json).ok()) {
-                Some(op) => self.step(j, &op, doc),
-                None => doc,
+            state = match self.applied.get(j).and_then(|json| serde_json::from_str::<Op>(json).ok()) {
+                Some(op) => self.step(j, &op, state),
+                None => state,
             };
             // Kept until the next prune: an op's rebase asks for neighbouring states.
-            self.states.insert(j + 1, doc.clone());
+            self.states.insert(j + 1, state.clone());
         }
-        doc
+        state
     }
 
     /// Replays op `j` on `doc`, carrying its positions through the ops before it that its author
     /// hadn't seen.
-    fn step(&mut self, j: usize, op: &Op, doc: Document) -> Document {
+    fn step(&mut self, j: usize, op: &Op, state: State) -> State {
         let hash = self.applied.get(j).map(|json| op_hash(json));
         if hash.is_some_and(|h| self.skip.contains(&h)) {
             log::warn!("left out a shared `{}` that crashed this app before", op.c);
-            return doc;
+            return state;
         }
         let unseen: Vec<usize> =
             (j.saturating_sub(WINDOW)..j).filter(|&i| self.ids.get(i).is_some_and(|(c, n)| op.k.get(c).is_none_or(|seen| *n >= *seen))).collect();
-        let pairs: Vec<(Document, Document)> = unseen.iter().map(|&i| (self.state_at(i), self.state_at(i + 1))).collect();
+        let pairs: Vec<(Document, Document)> = unseen.iter().map(|&i| (self.state_at(i).doc, self.state_at(i + 1).doc)).collect();
         REPLAYING.with(|r| r.set(hash));
-        let out = replay(&mut self.replica, op, &pairs, doc);
+        let (doc, sel) = replay(&mut self.replica, op, &pairs, Some(&state.ids), state.doc.clone());
         REPLAYING.with(|r| r.set(None));
-        out
+        state.next(op, doc, sel.as_ref())
     }
 
     /// Drops cached states no longer needed: the last `RECENT`, and the last `CHECKPOINTS`
@@ -583,22 +624,32 @@ fn bump(id: u32, taken: &BTreeSet<u32>) -> u32 {
 }
 
 /// Runs `op` on `doc` as its author ran it, on the replica; `pairs` are the documents before and
-/// after each op its author hadn't seen. An op that can't run leaves `doc` as it was.
-fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Document) -> Document {
+/// after each op its author hadn't seen, `ids` those of `doc`'s characters. An op that can't run
+/// leaves `doc` as it was. With the document, the selection the op ran with (for a command).
+fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<&Ids>, doc: Document) -> (Document, Option<Selection>) {
     let (parts, comments) = made(pairs);
     let story = |s: StoryRef| match s {
         StoryRef::Part(id) => StoryRef::Part(bump(id, &parts)),
         body => body,
     };
-    // `None`: an unseen op deleted the story the position is in.
-    let map = |p: &Pos| {
+    // Just after the character it was after, when that's still here; else carried through what
+    // the author hadn't seen. `None`: an unseen op deleted the story the position is in.
+    let map = |p: &Pos, y: Option<Option<ids::Id>>| {
         let p = Pos { story: story(p.story), ..p.clone() };
+        if pairs.is_empty() {
+            return Some(p);
+        }
+        if let (Some(ids), Some(y)) = (ids, y)
+            && let Some(q) = ids.find(&doc, p.story, y)
+        {
+            return Some(q);
+        }
         pairs.iter().try_fold(p, |p, (a, b)| rebase::map_pos(a, b, &p, &|id| id))
     };
     // Hostile input: paths of a sane depth only.
     if op.sel.anchor.path.0.len() > MAX_PATH || op.sel.focus.path.0.len() > MAX_PATH {
         log::warn!("skipped a shared `{}` with a bad position", op.c);
-        return doc;
+        return (doc, None);
     }
     if let Some(d) = &op.d {
         let at = |s: StoryRef, i: usize| {
@@ -607,17 +658,17 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
             Some((s, i))
         };
         return match patch::apply(&doc, d, &at) {
-            Some(out) => out,
+            Some(out) => (out, None),
             None => {
                 log::info!("a shared `{}` did nothing: the same things changed since", op.c);
-                doc
+                (doc, None)
             }
         };
     }
     let spec_ok = r.registry.get(&op.c).is_some_and(|s| s.mutates) || matches!(op.c.as_str(), "file.open");
     if !spec_ok || !replayable(&op.c, &op.p) {
         log::warn!("skipped a shared `{}` this app can't run", op.c);
-        return doc;
+        return (doc, None);
     }
     let mut p = op.p.clone();
     if op.c.starts_with("review.")
@@ -626,13 +677,14 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
     {
         o.insert("id".into(), bump(id, &comments).into());
     }
-    let (Some(anchor), Some(focus)) = (map(&op.sel.anchor), map(&op.sel.focus)) else {
+    let (Some(anchor), Some(focus)) = (map(&op.sel.anchor, op.y.map(|y| y[0])), map(&op.sel.focus, op.y.map(|y| y[1]))) else {
         log::info!("a shared `{}` did nothing: what it edited was deleted", op.c);
-        return doc;
+        return (doc, None);
     };
     // A fresh session for every op: nothing an earlier op left behind (or this member did) counts.
     r.renew(doc);
-    r.sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
+    let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
+    r.sel = sel.clone();
     r.pending = op.pp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
@@ -642,7 +694,7 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], doc: Documen
         log::info!("shared `{}` did nothing here: {e}", op.c);
     }
     wordcraft_engine::cmd::set_clock(None);
-    r.doc.clone()
+    (r.doc.clone(), Some(sel))
 }
 
 /// `d` (made from `old`) with its block runs found in `now` instead: by pointer or content, the
