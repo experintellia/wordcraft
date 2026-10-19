@@ -460,7 +460,7 @@ fn an_edit_in_a_story_someone_deleted_does_nothing() {
     }))
     .unwrap();
     let mut r = Session::new(base());
-    let out = replay(&mut r, &op, &[(a, b.clone())], b.clone());
+    let out = replay(&mut r, &op, &[(a, b.clone())], None, b.clone()).0;
     assert!(patch::diff(&b, &out).is_empty(), "{}", out.plain_text(StoryRef::Body));
 }
 
@@ -497,4 +497,77 @@ fn an_edit_nobody_stored_can_be_stored_by_whoever_has_it() {
     late.1.remote(&mut late.0, vec![stored, orphans], LATER);
     same_doc(&a.0, &late.0);
     assert_eq!(text(&late.0), "Shared by Ann");
+}
+
+/// Ann's and Bo's typing at one spot, Bo going on typing before Ann's arrives: whichever order the
+/// log gives, each one's words stay together.
+#[test]
+fn typing_on_at_the_same_spot_keeps_each_ones_words_together() {
+    for typed in ["the", "a"] {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("[]", &mut [&mut a, &mut b]);
+        at(&mut a.0, 0, 1);
+        run(&mut a.0, "text.insert", json!({"text": typed}));
+        let ann = share(&mut a.0, &mut a.1);
+        at(&mut b.0, 0, 1);
+        run(&mut b.0, "text.insert", json!({"text": typed}));
+        let bo1 = share(&mut b.0, &mut b.1);
+        run(&mut b.0, "text.insert", json!({"text": " end"}));
+        let bo2 = share(&mut b.0, &mut b.1);
+        for (s, c) in [&mut a, &mut b] {
+            c.remote(s, [ann.clone(), bo1.clone(), bo2.clone()].concat(), LATER);
+        }
+        same_doc(&a.0, &b.0);
+        let t = text(&a.0);
+        let ok = [format!("[{typed}{typed} end]"), format!("[{typed} end{typed}]")];
+        assert!(ok.contains(&t), "{typed}: {t}");
+        // Bo's caret is still after his own words.
+        run(&mut b.0, "text.insert", json!({"text": "!"}));
+        assert!(text(&b.0).contains(&format!("{typed} end!")), "{}", text(&b.0));
+    }
+}
+
+/// Ann and Bo each type two words at one spot, each seeing the other's first word before their
+/// second: the log interleaves them, and still each one's words stay in order and together.
+#[test]
+fn interleaved_typing_at_one_spot_stays_in_each_ones_order() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("[]", &mut [&mut a, &mut b]);
+    at(&mut a.0, 0, 1);
+    run(&mut a.0, "text.insert", json!({"text": "Hello"}));
+    let a1 = share(&mut a.0, &mut a.1);
+    at(&mut b.0, 0, 1);
+    run(&mut b.0, "text.insert", json!({"text": "Foo"}));
+    let b1 = share(&mut b.0, &mut b.1);
+    // Each sees the other's first word, then types the second before anything else arrives.
+    a.1.remote(&mut a.0, b1.clone(), LATER);
+    b.1.remote(&mut b.0, a1.clone(), LATER);
+    run(&mut a.0, "text.insert", json!({"text": " world"}));
+    let a2 = share(&mut a.0, &mut a.1);
+    run(&mut b.0, "text.insert", json!({"text": " bar"}));
+    let b2 = share(&mut b.0, &mut b.1);
+    a.1.remote(&mut a.0, b2, LATER);
+    b.1.remote(&mut b.0, a2, LATER);
+    same_doc(&a.0, &b.0);
+    let t = text(&a.0);
+    assert!(t.contains("Hello world") && t.contains("Foo bar"), "{t}");
+}
+
+#[test]
+#[ignore = "timing"]
+fn timing_a_late_joiner_replays_a_long_log() {
+    let mut a = peer(1, "Ann");
+    let body: Vec<String> = (0..200).map(|i| format!("Paragraph {i} with some words in it to make it longer than a line.")).collect();
+    start(&body.join("\n"), &mut [&mut a]);
+    let mut all = vec![];
+    for i in 0..2000 {
+        at(&mut a.0, (i * 7) % 200, 5);
+        run(&mut a.0, "text.insert", json!({"text": "xy"}));
+        all.extend(share(&mut a.0, &mut a.1));
+    }
+    let t = std::time::Instant::now();
+    let mut late = peer(3, "Cy");
+    late.1.remote(&mut late.0, vec![a.1.encode_since(&yrs::StateVector::default())], LATER);
+    eprintln!("replayed {} ops in {:?}", a.1.applied.len(), t.elapsed());
+    same_doc(&a.0, &late.0);
 }
