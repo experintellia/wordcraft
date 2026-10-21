@@ -97,8 +97,19 @@ impl Ids {
         let (ids, blocks) = (self.0.get(&key(story))?, doc.story(story)?);
         let (path, off) = match after {
             None => start_of(blocks, 0, 0)?,
-            Some(id) => find(ids, blocks, id, 0)?,
+            Some(id) => find(ids, blocks, id, false, 0)?,
         };
+        Some(Pos { story, path: Path(path), off })
+    }
+
+    /// The character at `p` (just after it; a paragraph's mark at its end).
+    pub fn at(&self, doc: &Document, p: &Pos) -> Option<Id> {
+        at(self.0.get(&key(p.story))?, doc.story(p.story)?, &p.path.0, p.off, 0)
+    }
+
+    /// Where just before character `id` is in `story` of `doc`; `None` when it's gone.
+    pub fn find_before(&self, doc: &Document, story: StoryRef, id: Id) -> Option<Pos> {
+        let (path, off) = find(self.0.get(&key(story))?, doc.story(story)?, id, true, 0)?;
         Some(Pos { story, path: Path(path), off })
     }
 }
@@ -312,8 +323,8 @@ fn start_of(blocks: &[Arc<Block>], i: usize, depth: usize) -> Option<(Vec<u32>, 
     }
 }
 
-/// Just after `id` in `blocks`.
-fn find(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], id: Id, depth: usize) -> Option<(Vec<u32>, usize)> {
+/// Just after `id` in `blocks` (`before`: just before it; only for characters and marks).
+fn find(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], id: Id, before: bool, depth: usize) -> Option<(Vec<u32>, usize)> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -321,6 +332,9 @@ fn find(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], id: Id, depth: usize) -> O
         match (&**bi, &**b) {
             (BlockIds::Para(v), Block::Para(p)) => {
                 let Some(c) = v.iter().position(|x| *x == id) else { continue };
+                if before {
+                    return Some((vec![i as u32], p.text.char_indices().nth(c).map_or(p.text.len(), |(o, _)| o)));
+                }
                 if c + 1 < v.len() {
                     let off = p.text.char_indices().nth(c + 1).map_or(p.text.len(), |(o, _)| o);
                     return Some((vec![i as u32], off));
@@ -330,11 +344,15 @@ fn find(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], id: Id, depth: usize) -> O
             }
             (BlockIds::Table(mark, cells), Block::Table(t)) => {
                 if *mark == id {
-                    return start_of(blocks, i + 1, depth);
+                    return if before { None } else { start_of(blocks, i + 1, depth) };
                 }
                 for (r, (cells, row)) in cells.iter().zip(&t.rows).enumerate() {
                     for (c, ((cid, cids), cell)) in cells.iter().zip(&row.cells).enumerate() {
-                        let found = if *cid == id { start_of(&cell.blocks, 0, depth + 1) } else { find(cids, &cell.blocks, id, depth + 1) };
+                        let found = match *cid == id {
+                            true if before => return None,
+                            true => start_of(&cell.blocks, 0, depth + 1),
+                            false => find(cids, &cell.blocks, id, before, depth + 1),
+                        };
                         if let Some((p, off)) = found {
                             return Some(([i as u32, r as u32, c as u32].into_iter().chain(p).collect(), off));
                         }
@@ -345,6 +363,21 @@ fn find(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], id: Id, depth: usize) -> O
         }
     }
     None
+}
+
+/// The id at `path`/`off` in `blocks`: the character just after it, or the paragraph's mark.
+fn at(ids: &[Arc<BlockIds>], blocks: &[Arc<Block>], path: &[u32], off: usize, depth: usize) -> Option<Id> {
+    let (&i, rest) = path.split_first()?;
+    let i = i as usize;
+    match (&**ids.get(i)?, &**blocks.get(i)?) {
+        (BlockIds::Para(v), Block::Para(p)) if rest.is_empty() => v.get(p.text.char_indices().take_while(|(o, _)| *o < off).count()).copied(),
+        (BlockIds::Table(_, cells), Block::Table(t)) if depth < MAX_DEPTH => {
+            let [r, c, inner @ ..] = rest else { return None };
+            let (_, cids) = cells.get(*r as usize)?.get(*c as usize)?;
+            at(cids, &t.rows.get(*r as usize)?.cells.get(*c as usize)?.blocks, inner, off, depth + 1)
+        }
+        _ => None,
+    }
 }
 
 /// The id just before `path`/`off` in `blocks` (`Some(None)`: their start).
@@ -452,6 +485,19 @@ mod tests {
         let n = ids.next(&a, &t, None, (2, 0));
         assert_eq!(at(&n, &t, start_def), (vec![2], 0));
         assert_eq!(at(&n, &t, None), (vec![0], 0));
+    }
+
+    #[test]
+    fn a_character_is_found_before_and_after() {
+        let a = doc("abc\nd");
+        let ids = Ids::fresh(&a, (0, 0));
+        let b = ids.at(&a, &Pos::body(0, 1)).unwrap();
+        assert_eq!(ids.find_before(&a, StoryRef::Body, b).map(|p| (p.path.0, p.off)), Some((vec![0], 1)));
+        assert_eq!(ids.find(&a, StoryRef::Body, Some(b)).map(|p| (p.path.0, p.off)), Some((vec![0], 2)));
+        // At the end of a paragraph: its mark.
+        let mark = ids.at(&a, &Pos::body(0, 3)).unwrap();
+        assert_eq!(ids.find_before(&a, StoryRef::Body, mark).map(|p| (p.path.0, p.off)), Some((vec![0], 3)));
+        assert_eq!(ids.at(&a, &Pos::body(5, 0)), None);
     }
 
     #[test]

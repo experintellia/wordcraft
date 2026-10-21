@@ -625,3 +625,20 @@ fn a_table_put_where_someone_types_doesnt_take_the_typing() {
         assert!(text(&a.0).ends_with("Xdef"), "{:?}", text(&a.0));
     }
 }
+
+/// Bo deletes a range while Ann types just in front of it: whichever order the log gives, Ann's
+/// typing stays.
+#[test]
+fn deleting_a_range_keeps_what_others_type_in_front_of_it() {
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("abcde", &mut [&mut a, &mut b]);
+        at(&mut a.0, 0, 2);
+        run(&mut a.0, "text.insert", json!({"text": "X"}));
+        b.0.sel = Selection { anchor: Pos::body(0, 4), focus: Pos::body(0, 2) };
+        run(&mut b.0, "text.delete", json!({}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        assert_eq!(text(&a.0), "abXe");
+    }
+}
