@@ -48,8 +48,10 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
 - **What an op carries.** The command and its parameters, the selection and the formatting waiting
   at the caret, the author (the chat name), the clock and the preferences that differ from the
   defaults (AutoCorrect options; a member's own AutoCorrect entries and exceptions stay on their
-  device, and spelling commands aren't shared). The author checks that replaying the op gives the same document; when
-  it doesn't (the clipboard, the format painter, the view), the op carries the change instead: the
+  device, and spelling commands aren't shared). A paste carries what it read from the
+  clipboard, and Paste Formatting the formatting it applies, so both run again elsewhere and
+  merge like typing. The author checks that replaying the op gives the same document; when it
+  doesn't (another program's clipboard, the view…), the op carries the change instead: the
   changed paragraphs and tables and the changed fields, with a hash of what they replace. An
   opened file travels as its bytes; pictures as base64. Typing is held back for 0.7 s and shared
   as one op.
