@@ -601,7 +601,8 @@ fn push(steps: &mut Vec<Step>, step: Step) {
 pub fn replayable(c: &str, p: &Json) -> bool {
     let file = c.starts_with("file.") && c != "file.open";
     // An opened file travels as its bytes; its `path` only names it.
-    let path = if c == "file.open" { p.get("data").is_none() } else { p.get("path").is_some() };
+    // (`import` names a file too: References › Manage Sources.)
+    let path = if c == "file.open" { p.get("data").is_none() } else { p.get("path").is_some() || p.get("import").is_some() };
     // Spelling commands read this member's dictionary and ignored words.
     let proofing = matches!(c, "review.applySuggestion" | "review.addToDictionary" | "review.ignoreAll" | "review.ignore");
     !file && !path && !proofing && !matches!(c, "tools.macros" | "tools.recordMacro" | "edit.repeat")

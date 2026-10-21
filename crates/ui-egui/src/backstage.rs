@@ -1222,6 +1222,10 @@ mod tests {
         a.execute("file.exportPdf", json!({})).unwrap();
         assert_eq!(sent.borrow().len(), 2);
         assert!(sent.borrow()[1].ends_with(".pdf"));
+        // The Quick Access badges number what the toolbar shows: Alt, 1 is Undo, not Save.
+        a.run("text.insert", json!({"text": "!"})).unwrap();
+        crate::keytips::qat_key(a, "1");
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Shared", "Alt, 1 undid the typing");
     }
 
     #[test]

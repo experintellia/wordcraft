@@ -142,6 +142,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-21 | webxdc fork: rebased onto upstream (299 commits). Upstream's CI gate replaces the fork's; upstream's narrow ribbon replaces the fork's phone patch. A document's Quick Parts travel in shared edits; the chat name stays the author over stored preferences; Alt-key numbers on the Quick Access Toolbar match the buttons a chat shows |
 | 2026-10-19 | webxdc fork, Phase 3: concurrent typing at the same spot keeps each member's words together. Every character has an id (the op that typed it), an op's selection travels as the characters before it, and replay puts it just after them, whatever the author hadn't seen; the local caret follows others' edits the same way |
 | 2026-10-16 | webxdc fork, Phase 2: shared editing. Everyone in the chat edits one document: each change is an op in a Yjs array (command, selection, author, clock, preferences; a patch of the changed paragraphs when it can't run again elsewhere), replayed in the same order by every member; concurrent typing merges (positions carried through the ops their author hadn't seen, mapped from the documents with a Myers diff); Undo takes back only your own changes; members' carets and selections show live; hostile ops are refused. Convergence fuzz, undo, hostile-op and layout-determinism tests |
 | 2026-10-16 | webxdc fork, Phase 1: `packaging/webxdc/package.sh` builds `wordcraft-<version>.xdc` (pre-gzipped wasm, `manifest.toml` naming the fork). In a messenger the app is one document: files come through `webxdc.importFiles`, Save As and Export send a copy to the chat, no New/Open/Save/Print/AutoSave/recent files or added fonts. The web build renders with WebGL2 (glow) and a size profile; fonts are embedded once; the webxdc build leaves out TIFF/WebP: wasm 40.3 MB → 24 MB raw, 15.7 → 9.9 MB gzipped. Phone width: no rulers, compact title and status bars, tabs keep the strip, dialogs and panes stay on screen, the page starts fitted to the width. CI builds a preview `.xdc` per PR and releases `wordcraft.xdc` |
@@ -512,6 +513,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Progress log: webxdc fork rebased onto upstream |
 | 2026-10-19 | minor | Progress log: character ids for concurrent typing (fork) |
 | 2026-10-16 | minor | Progress log: shared editing in a webxdc chat (fork) |
 | 2026-10-16 | minor | Progress log: webxdc packaging and phone width (fork) |

@@ -69,6 +69,10 @@ pub fn start() {
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
+                    // In a chat the author is the chat name, not one stored on an earlier visit.
+                    if let Some(api) = &xdc {
+                        webxdc::chat_name(api, &mut app.session);
+                    }
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
                     if !sample && app.session.prefs.region.is_some() {

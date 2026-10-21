@@ -111,7 +111,32 @@ macro_rules! fields {
         $m!(footnote_separators, "footnoteSeparators");
         $m!(endnote_separators, "endnoteSeparators");
         $m!(passthrough, "passthrough");
+        $m!(glossary, "glossary");
     };
+}
+
+/// Every field of a document travels in a patch: a field upstream adds breaks the build here
+/// until [`fields!`] (or the code for blocks, parts and pictures) carries it.
+#[allow(dead_code)]
+fn every_field_is_in_a_patch(d: &Document) {
+    let Document {
+        body: _,
+        parts: _,
+        media: _,
+        last_section: _,
+        styles: _,
+        numbering: _,
+        comments: _,
+        revisions: _,
+        settings: _,
+        core: _,
+        sources: _,
+        custom_props: _,
+        footnote_separators: _,
+        endnote_separators: _,
+        passthrough: _,
+        glossary: _,
+    } = d;
 }
 
 /// The patch that makes `a` into `b`.
@@ -221,6 +246,7 @@ mod tests {
         b.body.insert(1, b.body[0].clone());
         b.core.title = "Shared".into();
         b.media.insert("p.png".into(), Arc::new(vec![1, 2, 3]));
+        b.glossary.push(Default::default());
         let p = diff(&a, &b);
         assert_eq!(p.b.len(), 1);
         let json = serde_json::to_string(&p).unwrap();

@@ -266,8 +266,9 @@ fn a_paste_sends_the_clipboard_only_when_it_read_it() {
     sync(&mut [&mut a, &mut b]);
     let last = a.1.applied.last().unwrap();
     assert!(last.contains("\"fp\"") && !last.contains("\"cb\""), "{last}");
-    // Ann's own copy, with the system clipboard's text too: sent once, as the copy.
-    at(&mut a.0, 0, 0);
+    // Ann's own copy, with the system clipboard's text too, into plain text (text alone would
+    // take its formatting): sent once, as the copy.
+    at(&mut a.0, 0, 7);
     run(&mut a.0, "edit.paste", json!({"text": "SECRET"}));
     sync(&mut [&mut a, &mut b]);
     same_doc(&a.0, &b.0);
@@ -737,4 +738,18 @@ fn enter_at_the_start_of_a_range_deleted_meanwhile_still_converges() {
         let t = text(&a.0).to_lowercase();
         assert!(t == "abcf" || t == "abc\nf", "{t:?}");
     }
+}
+
+/// A document's Quick Parts (glossary) travel too, as any other part of the document.
+#[test]
+fn quick_parts_travel_with_the_document() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("text", &mut [&mut a, &mut b]);
+    let mut doc = a.0.doc.clone();
+    doc.glossary.push(Default::default());
+    a.0.doc = doc;
+    a.0.touch();
+    sync(&mut [&mut a, &mut b]);
+    same_doc(&a.0, &b.0);
+    assert_eq!(b.0.doc.glossary.len(), 1);
 }

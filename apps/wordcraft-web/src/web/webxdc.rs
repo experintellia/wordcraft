@@ -60,11 +60,16 @@ pub fn api() -> Option<JsValue> {
     api.is_object().then_some(api)
 }
 
-/// Fits `services` to the messenger and names the user after their chat name.
-pub fn host(api: &JsValue, session: &mut Session, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
+/// Names the user after their chat name (also over a name stored in the preferences).
+pub fn chat_name(api: &JsValue, session: &mut Session) {
     if let Some(name) = Reflect::get(api, &"selfName".into()).ok().and_then(|n| n.as_string()).filter(|n| !n.trim().is_empty()) {
         session.author = name;
     }
+}
+
+/// Fits `services` to the messenger and names the user after their chat name.
+pub fn host(api: &JsValue, session: &mut Session, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
+    chat_name(api, session);
     let repaint = ctx.clone();
     let import = api.clone();
     services.open_async = Some(Box::new(move |purpose: &str| {
