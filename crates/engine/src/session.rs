@@ -486,6 +486,10 @@ pub struct Edit {
     /// The selection and the formatting waiting at the caret before it ran.
     pub sel: Selection,
     pub pending: Option<CharProps>,
+    /// What a paste read from the clipboard, and the formatting the Format Painter held, before
+    /// it ran (`None` for other commands).
+    pub clipboard: Option<Fragment>,
+    pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// The clock it read (Unix seconds; [`crate::cmd::set_clock`]).
     pub time: u64,
     /// The document before and after (blocks are shared, so cheap), and the selection after.
@@ -1239,6 +1243,8 @@ impl Session {
                 params: params.clone(),
                 sel: self.sel.clone(),
                 pending: self.pending.clone(),
+                clipboard: None,
+                painter: None,
                 time: crate::cmd::now_unix(),
                 before: self.doc.clone(),
                 after: self.doc.clone(),
@@ -1256,6 +1262,9 @@ impl Session {
         }
         let (sel, pending) = (self.sel.clone(), self.pending.clone());
         let (before, rev) = (top.then(|| self.doc.clone()), self.rev);
+        // What a paste or Paste Formatting reads, which a replay elsewhere needs.
+        let clipboard = (top && id.starts_with("edit.paste") && id != "edit.pasteFormat").then(|| self.clipboard.clone()).flatten();
+        let painter = (top && id == "edit.pasteFormat").then(|| self.painter.clone()).flatten();
         self.run_depth += 1;
         // `run_inner` catches a command's panic; this also covers its own bookkeeping, so the
         // depth and the clock are always put back.
@@ -1271,6 +1280,8 @@ impl Session {
                 params: params.clone(),
                 sel,
                 pending,
+                clipboard,
+                painter,
                 time: crate::cmd::now_unix(),
                 before,
                 after: self.doc.clone(),

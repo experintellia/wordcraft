@@ -35,7 +35,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::edit::Fragment;
+use wordcraft_doc::props::{CharProps, ParaProps};
 use wordcraft_doc::{Document, Pos, StoryRef};
 use wordcraft_engine::{Edit, Prefs, Selection, Session};
 use yrs::updates::decoder::Decode as _;
@@ -90,6 +91,12 @@ pub struct Op {
     /// The change, for an op that can't run again elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     d: Option<Patch>,
+    /// What a paste read from its author's clipboard, and the formatting Paste Formatting
+    /// applied: an op that reads them runs again elsewhere (and merges like typing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cb: Option<Fragment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fp: Option<(CharProps, ParaProps, bool)>,
     /// The selection's anchor and focus as the characters just before them ([`ids`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     y: Option<[Option<ids::Id>; 2]>,
@@ -290,6 +297,8 @@ impl Collab {
                 params: Json::Null,
                 sel: s.sel.clone(),
                 pending: None,
+                clipboard: None,
+                painter: None,
                 time: wordcraft_engine::cmd::now_unix(),
                 before,
                 after: s.doc.clone(),
@@ -342,14 +351,35 @@ impl Collab {
         }
         let label = if e.id == "text.insert" { "Typing" } else { s.registry.get(&e.id).map_or("Edit", |c| c.label) };
         let label = label.trim_end_matches('…').to_string();
-        let mut op = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
-        let same = replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, &op, &[], None, e.before.clone()).0, &e.after).is_empty();
+        let plain = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
+        // A paste or Paste Formatting runs again with what it read, carried only when it needs it
+        // (a paste from another program doesn't send this member's clipboard), the smallest way
+        // that gives the same document and fits the chat; else it travels as a patch.
+        let mut tries = vec![plain.clone()];
+        if e.clipboard.is_some() || e.painter.is_some() {
+            let with = Op { cb: e.clipboard.clone(), fp: e.painter.clone(), ..plain.clone() };
+            let mut lean = with.clone();
+            if let Some(o) = lean.p.as_object_mut() {
+                o.retain(|k, _| !matches!(k.as_str(), "text" | "html" | "rtf"));
+                if o.is_empty() {
+                    lean.p = Json::Null;
+                }
+            }
+            tries.extend([lean, with]);
+        }
+        let max = self.max_op;
+        let fits = |op: &Op| (op.cb.is_none() && op.fp.is_none()) || serde_json::to_string(op).is_ok_and(|j| j.len() <= max);
+        let chosen = tries.into_iter().find(|op| {
+            fits(op) && replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, op, &[], None, e.before.clone()).0, &e.after).is_empty()
+        });
+        let same = chosen.is_some();
+        let mut op = chosen.unwrap_or(plain);
         if !same {
             let d = patch::diff(&e.before, &e.after);
             if d.is_empty() {
                 return;
             }
-            op = Op { c: label.clone(), p: Json::Null, d: Some(d), ..op };
+            op = Op { c: label.clone(), p: Json::Null, d: Some(d), cb: None, fp: None, ..op };
         } else if patch::diff(&e.before, &e.after).is_empty() {
             return;
         }
@@ -372,6 +402,8 @@ impl Collab {
             ys: (sel.anchor != sel.focus).then(|| self.states.get(&self.applied.len()).and_then(|st| st.ids.at(&st.doc, &sel.ordered().0))).flatten(),
             sel,
             d,
+            cb: None,
+            fp: None,
         }
     }
 
@@ -701,6 +733,8 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<
     let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
     r.sel = sel.clone();
     r.pending = op.pp.clone();
+    r.clipboard = op.cb.clone();
+    r.painter = op.fp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
     r.prefs = prefs_from(&op.o);

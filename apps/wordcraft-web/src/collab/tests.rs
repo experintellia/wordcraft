@@ -221,7 +221,7 @@ fn typing_is_shared_as_one_op_once_it_pauses() {
 fn an_op_that_cant_run_again_carries_its_change() {
     let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
     start("plain words", &mut [&mut a, &mut b]);
-    // A paste of Ann's own clipboard: Bo has no such clipboard.
+    // A paste carries Ann's clipboard (Bo has no such clipboard) and runs again.
     a.0.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
     run(&mut a.0, "format.bold", json!({}));
     run(&mut a.0, "edit.copy", json!({}));
@@ -230,7 +230,76 @@ fn an_op_that_cant_run_again_carries_its_change() {
     sync(&mut [&mut a, &mut b]);
     same_doc(&a.0, &b.0);
     assert_eq!(text(&b.0), "plain wordsplain");
-    assert!(a.1.applied.last().unwrap().contains("\"d\""), "the paste travels as a patch");
+    let last = a.1.applied.last().unwrap();
+    assert!(last.contains("\"cb\"") && !last.contains("\"d\""), "the paste runs again: {last}");
+    // A change made outside any command travels as a patch.
+    let mut doc = a.0.doc.clone();
+    doc.core.title = "Shared".into();
+    a.0.doc = doc;
+    a.0.touch();
+    sync(&mut [&mut a, &mut b]);
+    same_doc(&a.0, &b.0);
+    assert_eq!(b.0.doc.core.title, "Shared");
+    assert!(a.1.applied.last().unwrap().contains("\"d\""), "it travels as a patch");
+}
+
+/// What a paste sends of the clipboard: only what it read, the smallest way.
+#[test]
+fn a_paste_sends_the_clipboard_only_when_it_read_it() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("SECRET words", &mut [&mut a, &mut b]);
+    a.0.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 6) };
+    run(&mut a.0, "format.bold", json!({}));
+    run(&mut a.0, "edit.copy", json!({}));
+    run(&mut a.0, "edit.copyFormat", json!({}));
+    // Another program's text: Ann's own clipboard stays with her.
+    at(&mut a.0, 0, 12);
+    run(&mut a.0, "edit.paste", json!({"text": " other", "html": "<i> other</i>"}));
+    sync(&mut [&mut a, &mut b]);
+    same_doc(&a.0, &b.0);
+    let last = a.1.applied.last().unwrap();
+    assert!(!last.contains("\"cb\"") && last.matches("SECRET").count() == 0, "{last}");
+    // Paste Formatting sends the formatting, not the clipboard.
+    let n = text(&a.0).len();
+    a.0.sel = Selection { anchor: Pos::body(0, 13), focus: Pos::body(0, n) };
+    run(&mut a.0, "edit.pasteFormat", json!({}));
+    sync(&mut [&mut a, &mut b]);
+    let last = a.1.applied.last().unwrap();
+    assert!(last.contains("\"fp\"") && !last.contains("\"cb\""), "{last}");
+    // Ann's own copy, with the system clipboard's text too: sent once, as the copy.
+    at(&mut a.0, 0, 0);
+    run(&mut a.0, "edit.paste", json!({"text": "SECRET"}));
+    sync(&mut [&mut a, &mut b]);
+    same_doc(&a.0, &b.0);
+    let last = a.1.applied.last().unwrap();
+    assert!(last.contains("\"cb\"") && !last.contains("\"p\":"), "the copy, without its text again: {last}");
+}
+
+/// Ann pastes and paints formatting in a paragraph Bo is typing in at the same time: both land.
+/// (As patches, Ann's edits were refused whenever Bo's typing reached the same paragraph first.)
+#[test]
+fn a_paste_and_paste_formatting_merge_with_typing_in_the_same_paragraph() {
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("one two three", &mut [&mut a, &mut b]);
+        a.0.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 3) };
+        run(&mut a.0, "format.bold", json!({}));
+        run(&mut a.0, "edit.copy", json!({}));
+        run(&mut a.0, "edit.copyFormat", json!({}));
+        sync(&mut [&mut a, &mut b]);
+        a.0.sel = Selection { anchor: Pos::body(0, 4), focus: Pos::body(0, 7) };
+        run(&mut a.0, "edit.pasteFormat", json!({}));
+        at(&mut a.0, 0, 13);
+        run(&mut a.0, "edit.paste", json!({}));
+        at(&mut b.0, 0, 0);
+        run(&mut b.0, "text.insert", json!({"text": "Bo: "}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        assert_eq!(text(&a.0), "Bo: one two threeone");
+        // "two" got the copied formatting.
+        let p = a.0.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert_eq!(p.props_at(9).bold, Some(true), "{:?}", p.props_at(9));
+    }
 }
 
 #[test]
