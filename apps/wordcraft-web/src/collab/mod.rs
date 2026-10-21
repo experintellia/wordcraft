@@ -35,7 +35,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::edit::Fragment;
+use wordcraft_doc::props::{CharProps, ParaProps};
 use wordcraft_doc::{Document, Pos, StoryRef};
 use wordcraft_engine::{Edit, Prefs, Selection, Session};
 use yrs::updates::decoder::Decode as _;
@@ -90,6 +91,12 @@ pub struct Op {
     /// The change, for an op that can't run again elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     d: Option<Patch>,
+    /// What a paste read from its author's clipboard, and the formatting Paste Formatting
+    /// applied: an op that reads them runs again elsewhere (and merges like typing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cb: Option<Fragment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fp: Option<(CharProps, ParaProps, bool)>,
     /// The selection's anchor and focus as the characters just before them ([`ids`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     y: Option<[Option<ids::Id>; 2]>,
@@ -286,6 +293,8 @@ impl Collab {
                 params: Json::Null,
                 sel: s.sel.clone(),
                 pending: None,
+                clipboard: None,
+                painter: None,
                 time: wordcraft_engine::cmd::now_unix(),
                 before,
                 after: s.doc.clone(),
@@ -339,13 +348,15 @@ impl Collab {
         let label = if e.id == "text.insert" { "Typing" } else { s.registry.get(&e.id).map_or("Edit", |c| c.label) };
         let label = label.trim_end_matches('…').to_string();
         let mut op = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
+        op.cb = e.clipboard.clone();
+        op.fp = e.painter.clone();
         let same = replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, &op, &[], None, e.before.clone()).0, &e.after).is_empty();
         if !same {
             let d = patch::diff(&e.before, &e.after);
             if d.is_empty() {
                 return;
             }
-            op = Op { c: label.clone(), p: Json::Null, d: Some(d), ..op };
+            op = Op { c: label.clone(), p: Json::Null, d: Some(d), cb: None, fp: None, ..op };
         } else if patch::diff(&e.before, &e.after).is_empty() {
             return;
         }
@@ -367,6 +378,8 @@ impl Collab {
             y: self.states.get(&self.applied.len()).and_then(|st| Some([st.ids.anchor(&st.doc, &sel.anchor)?, st.ids.anchor(&st.doc, &sel.focus)?])),
             sel,
             d,
+            cb: None,
+            fp: None,
         }
     }
 
@@ -686,6 +699,8 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<
     let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
     r.sel = sel.clone();
     r.pending = op.pp.clone();
+    r.clipboard = op.cb.clone();
+    r.painter = op.fp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
     r.prefs = prefs_from(&op.o);
