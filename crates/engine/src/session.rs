@@ -1378,7 +1378,7 @@ impl Session {
         let (sel, pending) = (self.sel.clone(), self.pending.clone());
         let (before, rev) = (top.then(|| self.doc.clone()), self.rev);
         // What a paste or Paste Formatting reads, which a replay elsewhere needs.
-        let clipboard = (top && id.starts_with("edit.paste")).then(|| self.clipboard.clone()).flatten();
+        let clipboard = (top && id.starts_with("edit.paste") && id != "edit.pasteFormat").then(|| self.clipboard.clone()).flatten();
         let painter = (top && id == "edit.pasteFormat").then(|| self.painter.clone()).flatten();
         self.run_depth += 1;
         // `run_inner` catches a command's panic; this also covers its own bookkeeping, so the

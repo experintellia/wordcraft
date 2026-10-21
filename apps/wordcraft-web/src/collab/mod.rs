@@ -351,10 +351,29 @@ impl Collab {
         }
         let label = if e.id == "text.insert" { "Typing" } else { s.registry.get(&e.id).map_or("Edit", |c| c.label) };
         let label = label.trim_end_matches('…').to_string();
-        let mut op = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
-        op.cb = e.clipboard.clone();
-        op.fp = e.painter.clone();
-        let same = replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, &op, &[], None, e.before.clone()).0, &e.after).is_empty();
+        let plain = self.op(&e.id, e.params.clone(), e.sel.clone(), e.pending.clone(), s, e.time, None);
+        // A paste or Paste Formatting runs again with what it read, carried only when it needs it
+        // (a paste from another program doesn't send this member's clipboard), the smallest way
+        // that gives the same document and fits the chat; else it travels as a patch.
+        let mut tries = vec![plain.clone()];
+        if e.clipboard.is_some() || e.painter.is_some() {
+            let with = Op { cb: e.clipboard.clone(), fp: e.painter.clone(), ..plain.clone() };
+            let mut lean = with.clone();
+            if let Some(o) = lean.p.as_object_mut() {
+                o.retain(|k, _| !matches!(k.as_str(), "text" | "html" | "rtf"));
+                if o.is_empty() {
+                    lean.p = Json::Null;
+                }
+            }
+            tries.extend([lean, with]);
+        }
+        let max = self.max_op;
+        let fits = |op: &Op| (op.cb.is_none() && op.fp.is_none()) || serde_json::to_string(op).is_ok_and(|j| j.len() <= max);
+        let chosen = tries.into_iter().find(|op| {
+            fits(op) && replayable(&op.c, &op.p) && patch::diff(&replay(&mut self.replica, op, &[], None, e.before.clone()).0, &e.after).is_empty()
+        });
+        let same = chosen.is_some();
+        let mut op = chosen.unwrap_or(plain);
         if !same {
             let d = patch::diff(&e.before, &e.after);
             if d.is_empty() {
