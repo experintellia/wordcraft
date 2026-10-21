@@ -93,6 +93,10 @@ pub struct Op {
     /// The selection's anchor and focus as the characters just before them ([`ids`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     y: Option<[Option<ids::Id>; 2]>,
+    /// A range's first character: its start stays just before it, so what others type in front
+    /// of the range isn't taken into it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ys: Option<ids::Id>,
 }
 
 /// The document after some ops, and its characters' ids.
@@ -365,6 +369,7 @@ impl Collab {
             t,
             o: prefs_diff(&s.prefs),
             y: self.states.get(&self.applied.len()).and_then(|st| Some([st.ids.anchor(&st.doc, &sel.anchor)?, st.ids.anchor(&st.doc, &sel.focus)?])),
+            ys: (sel.anchor != sel.focus).then(|| self.states.get(&self.applied.len()).and_then(|st| st.ids.at(&st.doc, &sel.ordered().0))).flatten(),
             sel,
             d,
         }
@@ -677,10 +682,20 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<
     {
         o.insert("id".into(), bump(id, &comments).into());
     }
-    let (Some(anchor), Some(focus)) = (map(&op.sel.anchor, op.y.map(|y| y[0])), map(&op.sel.focus, op.y.map(|y| y[1]))) else {
+    let (Some(mut anchor), Some(mut focus)) = (map(&op.sel.anchor, op.y.map(|y| y[0])), map(&op.sel.focus, op.y.map(|y| y[1]))) else {
         log::info!("a shared `{}` did nothing: what it edited was deleted", op.c);
         return (doc, None);
     };
+    // A range's start: just before its first character, wherever that is now.
+    if !pairs.is_empty()
+        && let (Some(ids), Some(first)) = (ids, op.ys)
+    {
+        let start_is_anchor = op.sel.anchor <= op.sel.focus;
+        let st = story(if start_is_anchor { op.sel.anchor.story } else { op.sel.focus.story });
+        if let Some(q) = ids.find_before(&doc, st, first) {
+            *(if start_is_anchor { &mut anchor } else { &mut focus }) = q;
+        }
+    }
     // A fresh session for every op: nothing an earlier op left behind (or this member did) counts.
     r.renew(doc);
     let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
