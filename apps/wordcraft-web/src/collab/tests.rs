@@ -415,13 +415,13 @@ fn random_edit(s: &mut Session, rng: &mut Rng) {
         7 => s.run("review.newComment", &json!({"text": "c"})),
         // A range, into the next paragraph at times: deleted, or typed over.
         12 | 13 => {
-            let next = s.doc.next_para(StoryRef::Body, &path).filter(|_| rng.next() % 3 == 0);
+            let next = s.doc.next_para(StoryRef::Body, &path).filter(|_| rng.next().is_multiple_of(3));
             let focus = match next {
                 Some(p) => Pos { story: StoryRef::Body, path: p, off: 0 },
                 None => Pos { story: StoryRef::Body, off: s.doc.para(StoryRef::Body, &path).map_or(off, |p| p.clamp(off + 2)), path },
             };
             s.sel = Selection { anchor: s.sel.anchor.clone(), focus };
-            if rng.next() % 2 == 0 { s.run("text.delete", &json!({})) } else { s.run("text.insert", &json!({"text": "R"})) }
+            if rng.next().is_multiple_of(2) { s.run("text.delete", &json!({})) } else { s.run("text.insert", &json!({"text": "R"})) }
         }
         _ => s.run("insert.table", &json!({"rows": 2, "cols": 2})),
     };
