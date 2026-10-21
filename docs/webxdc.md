@@ -60,7 +60,9 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
   selection travels as the characters just before its ends, so on replay it lands just after
   them, whatever the author hadn't seen; two members typing at the same spot each keep their own
   words together, in log order. A range's start travels as its first character, so what others
-  type just in front of a range isn't deleted or formatted with it. Ids are worked out from each
+  type just in front of a range isn't deleted or formatted with it. (Known limit: Enter pressed just in front
+  of a range someone deletes meanwhile can lose its new empty paragraph, depending on the log
+  order; every member still agrees.) Ids are worked out from each
   op's documents, the same way on every member: typing, Backspace and Delete at the op's selection exactly, anything else by aligning
   the changed text (Myers' diff). When the character is gone, the position is carried through the
   ops its author hadn't seen, mapped from the documents themselves. Parts and comments made concurrently get other ids in
