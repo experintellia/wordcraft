@@ -399,7 +399,7 @@ impl Collab {
             t,
             o: prefs_diff(&s.prefs),
             y: self.states.get(&self.applied.len()).and_then(|st| Some([st.ids.anchor(&st.doc, &sel.anchor)?, st.ids.anchor(&st.doc, &sel.focus)?])),
-            // (A patch places its blocks by itself: no selection to carry.)
+            // (A patch places its blocks by itself: replay never reads a range's start for it.)
             ys: (d.is_none() && sel.anchor != sel.focus)
                 .then(|| self.states.get(&self.applied.len()).and_then(|st| st.ids.at(&st.doc, &sel.ordered().0)))
                 .flatten(),
