@@ -396,7 +396,7 @@ fn random_edit(s: &mut Session, rng: &mut Rng) {
     let len = s.doc.para(StoryRef::Body, &path).map_or(0, |p| p.text.len());
     let off = s.doc.para(StoryRef::Body, &path).map_or(0, |p| p.clamp(rng.next() as usize % (len + 1)));
     s.sel = Selection::caret(Pos { story: StoryRef::Body, path: path.clone(), off });
-    let r = match rng.next() % 12 {
+    let r = match rng.next() % 14 {
         9 => s.run("edit.undo", &json!({})),
         10 => s.run("edit.redo", &json!({})),
         11 => s.run("insert.picture", &json!({"data": PNG})),
@@ -413,6 +413,18 @@ fn random_edit(s: &mut Session, rng: &mut Rng) {
             s.run(["format.bold", "format.italic"][rng.next() as usize % 2], &json!({}))
         }
         7 => s.run("review.newComment", &json!({"text": "c"})),
+        // A range, into the next paragraph at times: deleted, or typed over.
+        12 | 13 => {
+            let next = s.doc.next_para(StoryRef::Body, &path).filter(|_| rng.next().is_multiple_of(3));
+            let focus = match next {
+                Some(p) => Pos { story: StoryRef::Body, path: p, off: 0 },
+                None => Pos { story: StoryRef::Body, off: s.doc.para(StoryRef::Body, &path).map_or(off, |p| p.clamp(off + 2)), path },
+            };
+            // At a paragraph's end, the range reaches back instead.
+            let anchor = if focus == s.sel.anchor { Pos { off: off.saturating_sub(2), ..focus.clone() } } else { s.sel.anchor.clone() };
+            s.sel = Selection { anchor: s.doc.clamp(&anchor), focus };
+            if rng.next().is_multiple_of(2) { s.run("text.delete", &json!({})) } else { s.run("text.insert", &json!({"text": "R"})) }
+        }
         _ => s.run("insert.table", &json!({"rows": 2, "cols": 2})),
     };
     let _ = r;
@@ -672,5 +684,57 @@ fn deleting_a_range_keeps_what_others_type_in_front_of_it() {
         sync(&mut [&mut a, &mut b]);
         same_doc(&a.0, &b.0);
         assert_eq!(text(&a.0), "abXe");
+    }
+}
+
+/// A range deleted forward, and one in a table cell, while someone types just in front of it.
+#[test]
+fn a_range_keeps_out_what_others_type_in_front_of_it_forward_and_in_tables() {
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("abcde", &mut [&mut a, &mut b]);
+        at(&mut a.0, 0, 2);
+        run(&mut a.0, "text.insert", json!({"text": "X"}));
+        b.0.sel = Selection { anchor: Pos::body(0, 2), focus: Pos::body(0, 4) };
+        run(&mut b.0, "text.delete", json!({}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        assert_eq!(text(&a.0), "abXe");
+    }
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("", &mut [&mut a, &mut b]);
+        run(&mut a.0, "insert.table", json!({"rows": 1, "cols": 1}));
+        run(&mut a.0, "text.insert", json!({"text": "hello"}));
+        sync(&mut [&mut a, &mut b]);
+        let cell = a.0.doc.para_paths(StoryRef::Body).into_iter().find(|p| p.0.len() == 4).unwrap();
+        let in_cell = |off| Pos { story: StoryRef::Body, path: cell.clone(), off };
+        a.0.sel = Selection::caret(in_cell(1));
+        run(&mut a.0, "text.insert", json!({"text": "X"}));
+        b.0.sel = Selection { anchor: in_cell(3), focus: in_cell(1) };
+        run(&mut b.0, "text.delete", json!({}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        assert!(text(&a.0).contains("hXlo"), "{:?}", text(&a.0));
+    }
+}
+
+/// Known limit: Enter at the start of a range someone deletes meanwhile. The new paragraph's
+/// mark is a new character after the range's first one (the old paragraph keeps its mark), so
+/// depending on the log order it is deleted with the range. Every member still agrees.
+#[test]
+fn enter_at_the_start_of_a_range_deleted_meanwhile_still_converges() {
+    for _ in 0..8 {
+        let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+        start("abc\ndef", &mut [&mut a, &mut b]);
+        at(&mut a.0, 0, 3);
+        run(&mut a.0, "text.newParagraph", json!({}));
+        b.0.sel = Selection { anchor: Pos::body(0, 3), focus: Pos::body(1, 2) };
+        run(&mut b.0, "text.delete", json!({}));
+        sync(&mut [&mut a, &mut b]);
+        same_doc(&a.0, &b.0);
+        // (AutoCorrect capitalizes the first letter.)
+        let t = text(&a.0).to_lowercase();
+        assert!(t == "abcf" || t == "abc\nf", "{t:?}");
     }
 }
