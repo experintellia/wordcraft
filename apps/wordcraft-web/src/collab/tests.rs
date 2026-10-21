@@ -420,7 +420,9 @@ fn random_edit(s: &mut Session, rng: &mut Rng) {
                 Some(p) => Pos { story: StoryRef::Body, path: p, off: 0 },
                 None => Pos { story: StoryRef::Body, off: s.doc.para(StoryRef::Body, &path).map_or(off, |p| p.clamp(off + 2)), path },
             };
-            s.sel = Selection { anchor: s.sel.anchor.clone(), focus };
+            // At a paragraph's end, the range reaches back instead.
+            let anchor = if focus == s.sel.anchor { Pos { off: off.saturating_sub(2), ..focus.clone() } } else { s.sel.anchor.clone() };
+            s.sel = Selection { anchor: s.doc.clamp(&anchor), focus };
             if rng.next().is_multiple_of(2) { s.run("text.delete", &json!({})) } else { s.run("text.insert", &json!({"text": "R"})) }
         }
         _ => s.run("insert.table", &json!({"rows": 2, "cols": 2})),
