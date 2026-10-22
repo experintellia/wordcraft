@@ -5,8 +5,8 @@ name: CI
 
 on:
   push:
-    # The fork's default branch is webxdc.
-    branches: [main, webxdc]
+    # The fork's default branch is webxdc; its main is a stale upstream mirror.
+    branches: [webxdc]
   pull_request:
   workflow_dispatch:
 
@@ -31,6 +31,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
+      # No debuginfo: faster test builds and a smaller cache; results don't change.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
