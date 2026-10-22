@@ -2289,6 +2289,11 @@ impl WordApp {
             Some(touch::Tap::Field(id)) => ctx.memory_mut(|m| m.request_focus(id)),
             None => {}
         }
+        // A hardware keyboard typing on the page (a tablet's): the page takes the platform text
+        // input from now on, so its dead keys and input methods compose.
+        if self.canvas.focused && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)))) {
+            touch::note_keyboard(&ctx);
+        }
         i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         // Animation effects off: egui's scroll areas get a wheel notch whole, not eased in.
         if !self.animations_on() {

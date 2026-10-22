@@ -73,7 +73,7 @@ fn a_tap_on_the_page_places_the_caret_with_the_keyboard_up() {
     let (text, pages) = zones(&mut h);
     assert!(pages.iter().any(|z| z.contains(p)), "the web shell's input lies over the page: {pages:?}");
     assert!(pages.iter().all(|z| text.contains(z)));
-    assert!(!ime(&h), "no keyboard before a tap on the page");
+    assert!(!ime(&h), "no keyboard before a tap on the page (or a key, a mouse click)");
 
     // The input over the page took the tap (and the focus): the shell reports it.
     assert!(wordcraft_ui_egui::tap_text_zone(&h.ctx, p).is_some());
@@ -120,16 +120,116 @@ fn a_tap_on_a_text_field_focuses_it_with_the_keyboard_up() {
     assert!(!h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("clayKilns"));
 }
 
+/// The interactable windows, menus and popups shown over the page.
+fn floating(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<egui::Rect> {
+    let layers: Vec<egui::LayerId> =
+        h.ctx.memory(|m| m.layer_ids().filter(|l| l.order != egui::Order::Background && m.areas().is_visible(l)).collect());
+    layers.into_iter().filter_map(|l| egui::AreaState::load(&h.ctx, l.id)).filter(|a| a.interactable).map(|a| a.rect()).collect()
+}
+
+/// The page's zones lie around what covers it (holes in the input), never under it.
+fn assert_around(pieces: &[egui::Rect], covers: &[egui::Rect]) {
+    assert!(!pieces.is_empty(), "the rest of the page still takes a tap");
+    for p in pieces {
+        assert!(covers.iter().all(|c| !p.intersects(c.shrink(1.0))), "{p:?} lies under one of {covers:?}");
+    }
+}
+
 #[test]
-fn no_text_input_over_a_page_a_dialog_covers() {
+fn a_dialog_over_the_page_cuts_a_hole_in_the_text_input() {
     let mut h = harness(true);
-    let before = zones(&mut h);
     h.state_mut().run("format.fontDialog", json!({})).unwrap();
     h.run_steps(3);
     assert!(h.state().dialog.is_some());
-    let (text, pages) = zones(&mut h);
-    assert!(pages.len() < before.1.len() || pages.is_empty(), "the page under the dialog takes no tap: {pages:?}");
-    assert!(text.iter().any(|z| !pages.contains(z)), "the dialog's fields do");
+    let (text, whole) = zones(&mut h);
+    let covers = floating(&h);
+    assert!(!covers.is_empty());
+    let (fields, pieces): (Vec<_>, Vec<_>) = text.into_iter().partition(|z| covers.iter().any(|c| c.contains_rect(*z)));
+    assert!(!fields.is_empty(), "the dialog's fields take a tap");
+    assert_around(&pieces, &covers);
+    assert!(whole.is_empty(), "without clip paths the input lies over no page partly covered");
+    let hole = covers[0].center();
+    if !fields.iter().any(|z| z.contains(hole)) {
+        assert_eq!(wordcraft_ui_egui::tap_text_zone(&h.ctx, hole), None, "a tap in the hole reaches the dialog");
+    }
+}
+
+#[test]
+fn a_menu_over_the_page_cuts_a_hole_and_the_page_around_it_still_types() {
+    let mut h = harness(true);
+    let p = end_of_text(&mut h);
+    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::Start, p));
+    h.step();
+    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::End, p));
+    h.run_steps(2);
+    assert!(h.state().canvas.context_menu_open);
+    let (pieces, _) = zones(&mut h);
+    let covers = floating(&h);
+    assert!(!covers.is_empty());
+    assert_around(&pieces, &covers);
+    assert_eq!(wordcraft_ui_egui::tap_text_zone(&h.ctx, covers[0].center()), None, "a tap on the menu reaches it");
+    let beside = pieces.iter().map(|z| z.center()).find(|c| covers.iter().all(|m| !m.contains(*c))).unwrap();
+    assert!(wordcraft_ui_egui::tap_text_zone(&h.ctx, beside).is_some(), "the page beside the menu still types");
+}
+
+#[test]
+fn a_hardware_key_on_the_page_takes_the_platform_text_input() {
+    let mut h = harness(true);
+    assert!(!ime(&h));
+    // A dead key (as eframe reports one: its physical key), then the letter it composes.
+    h.event(egui::Event::Key {
+        key: egui::Key::Quote,
+        physical_key: Some(egui::Key::Quote),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    step(&mut h);
+    assert!(wordcraft_ui_egui::keyboard_up(&h.ctx));
+    step(&mut h);
+    assert!(ime(&h), "IME from the first key on, so dead keys and input methods compose");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("é".into())));
+    h.run_steps(2);
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("é"));
+}
+
+#[test]
+fn a_mouse_click_on_the_page_takes_the_platform_text_input_a_finger_tap_does_not() {
+    let mut h = harness(true);
+    let p = end_of_text(&mut h);
+    let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: TouchId(7), phase, pos: p, force: None };
+    // A finger as eframe reports it: its `pointerup` runs a frame before its `touchend`.
+    h.input_mut().events.extend([egui::Event::PointerMoved(p), button(true), touch(TouchPhase::Start)]);
+    step(&mut h);
+    h.input_mut().events.push(button(false));
+    step(&mut h);
+    h.input_mut().events.extend([egui::Event::PointerGone, touch(TouchPhase::End)]);
+    step(&mut h);
+    assert!(!wordcraft_ui_egui::keyboard_up(&h.ctx), "a finger on the canvas brings no keyboard");
+    assert!(!ime(&h));
+    // A mouse click (iPad trackpad: the input takes no pointer events then).
+    h.run_steps(30);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(p + egui::vec2(-20.0, 0.0)),
+        egui::Event::PointerButton {
+            pos: p + egui::vec2(-20.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ]);
+    step(&mut h);
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: p + egui::vec2(-20.0, 0.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    step(&mut h);
+    assert!(wordcraft_ui_egui::keyboard_up(&h.ctx));
+    step(&mut h);
+    assert!(ime(&h), "a keyboard is likely there: the page asks for IME");
 }
 
 #[test]
