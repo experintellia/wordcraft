@@ -31,7 +31,11 @@ pub fn start() {
         };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        // In a messenger edits are shared as they happen, and `sendToChat` may never settle: a
+        // guard would only stop the app from closing (Electron cancels the close without asking).
+        if webxdc::api().is_none()
+            && let Err(e) = guard_unload(dirty.clone(), saves.clone())
+        {
             log::error!("no unsaved-changes guard: {e}");
         }
         let options = eframe::WebOptions::default();

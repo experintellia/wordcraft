@@ -35,6 +35,8 @@ const TAG_UPDATE: u8 = 0;
 const TAG_PRESENCE: u8 = 1;
 /// Stored updates are merged and sent at most this often (ms): each one is a chat message.
 const STORE_EVERY_MS: f64 = 3_000.0;
+/// Longest document name (characters) an update gives the messenger.
+const MAX_DOCUMENT_NAME: usize = 20;
 /// A moving selection is sent at most this often; a still one is repeated every `HEARTBEAT_MS`,
 /// and a member not heard from for `GONE_MS` disappears.
 const PRESENCE_EVERY_MS: f64 = 150.0;
@@ -48,6 +50,8 @@ const MAX_PATH: usize = 64;
 const DEFAULT_MAX_UPDATE: usize = 128_000;
 /// Where this member and device's client id is kept between runs.
 const CLIENT_KEY: &str = "wordcraft-client";
+/// Where this device's next op number is kept ([`Collab::next`]).
+const NEXT_KEY: &str = "wordcraft-next-op";
 /// Where the ops that crashed this app while replaying are kept ([`Collab::skip`]).
 const BAD_OPS_KEY: &str = "wordcraft-bad-ops";
 /// An edit another member sent only over the realtime channel and nobody stored after this long
@@ -165,6 +169,9 @@ pub struct Shared {
     lagging: HashMap<yrs::ClientID, f64>,
     /// `sendUpdateMaxSize`.
     max_update: usize,
+    /// How often edits are stored: `STORE_EVERY_MS`, or the messenger's `sendUpdateInterval`
+    /// when longer (calling sooner can delay updates for much longer).
+    store_every: f64,
     heard: Rc<RefCell<Vec<Presence>>>,
     /// The other members online, by `selfAddr`, with when they were last heard.
     peers: HashMap<String, (Presence, f64)>,
@@ -188,8 +195,11 @@ impl Shared {
             .map_or(DEFAULT_MAX_UPDATE, |v| v as usize);
         collab.max_op = (max / 4 * 3).saturating_sub(2_000);
         collab.skip = bad_ops();
+        collab.next = stored(NEXT_KEY).and_then(|v| v.parse().ok()).unwrap_or(0);
         remember_bad_ops();
         app.set_loading(true);
+        let store_every =
+            Reflect::get(&api, &"sendUpdateInterval".into()).ok().and_then(|v| v.as_f64()).map_or(STORE_EVERY_MS, |v| v.max(STORE_EVERY_MS));
         let mut shared = Shared {
             api,
             channel: None,
@@ -204,6 +214,7 @@ impl Shared {
             stored: Default::default(),
             lagging: HashMap::new(),
             max_update: max,
+            store_every,
             heard: Rc::default(),
             peers: HashMap::new(),
             sent: None,
@@ -293,22 +304,34 @@ impl Shared {
             return;
         }
         let now = js_sys::Date::now();
-        for update in self.collab.local(&mut app.session, now) {
-            self.send(update);
-        }
+        let updates = self.collab.local(&mut app.session, now);
+        self.share(updates);
         if let Some(why) = self.collab.refused.take() {
             app.status(why);
         }
         self.after_change(app);
-        if now - self.stored_at >= STORE_EVERY_MS {
+        if now - self.stored_at >= self.store_every {
             self.stored_at = now;
             self.store(now);
         } else if !self.unsent.is_empty() {
-            self.ctx.request_repaint_after(std::time::Duration::from_millis(STORE_EVERY_MS as u64));
+            self.ctx.request_repaint_after(std::time::Duration::from_millis(self.store_every as u64));
         }
         // Held typing is shared once it pauses.
         self.ctx.request_repaint_after(std::time::Duration::from_millis(800));
         self.tell(&app.session);
+    }
+
+    /// Sends this member's new updates, and keeps the next op number for the next run first.
+    fn share(&mut self, updates: Vec<Vec<u8>>) {
+        if updates.is_empty() {
+            return;
+        }
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = storage.set_item(NEXT_KEY, &self.collab.next.to_string());
+        }
+        for update in updates {
+            self.send(update);
+        }
     }
 
     /// The page is going away (hidden, closed): typing held back and everything unsent goes now.
@@ -318,9 +341,8 @@ impl Shared {
         }
         let now = js_sys::Date::now();
         // A clock past the hold shares held typing.
-        for update in self.collab.local(&mut app.session, now + 60_000.0) {
-            self.send(update);
-        }
+        let updates = self.collab.local(&mut app.session, now + 60_000.0);
+        self.share(updates);
         self.store(now);
     }
 
@@ -458,6 +480,8 @@ fn send_update(api: &JsValue, update: &[u8], document: Option<String>) -> bool {
     let mut fields = vec![("payload", object(&[("y", base64_encode(update).into())]))];
     if let Some(name) = document {
         let stem = std::path::Path::new(&name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().to_string());
+        // Messengers show about 20 characters; [`payload_size`] counts that many.
+        let stem: String = stem.chars().take(MAX_DOCUMENT_NAME).collect();
         fields.push(("document", stem.into()));
     }
     match call(api, "sendUpdate", &[object(&fields), "".into()]) {
@@ -469,9 +493,10 @@ fn send_update(api: &JsValue, update: &[u8], document: Option<String>) -> bool {
     }
 }
 
-/// The size of an update's `sendUpdate` payload: base64 plus the JSON around it.
+/// The size of an update's `sendUpdate` payload: base64 plus the JSON around it, a document
+/// name included (each character escaped at worst).
 fn payload_size(update: &[u8]) -> usize {
-    update.len().div_ceil(3) * 4 + 64
+    update.len().div_ceil(3) * 4 + 64 + MAX_DOCUMENT_NAME * 6
 }
 
 /// Records that the messenger stores what `update` holds.
@@ -485,9 +510,12 @@ fn note_stored(stored: &mut yrs::StateVector, update: &[u8]) {
 
 /// The ops that crashed this app while replaying, as kept in the page's storage.
 fn bad_ops() -> std::collections::BTreeSet<u64> {
-    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
-    let kept = storage.and_then(|s| s.get_item(BAD_OPS_KEY).ok().flatten()).unwrap_or_default();
-    kept.split(',').filter_map(|h| h.parse().ok()).collect()
+    stored(BAD_OPS_KEY).unwrap_or_default().split(',').filter_map(|h| h.parse().ok()).collect()
+}
+
+/// What the page's storage keeps under `key`.
+fn stored(key: &str) -> Option<String> {
+    web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
 }
 
 /// A panic aborts the web app: before it does, remember the op being replayed, so the next start
