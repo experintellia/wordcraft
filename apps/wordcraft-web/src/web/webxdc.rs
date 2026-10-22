@@ -287,9 +287,9 @@ impl Shared {
                 }
             }
             let updates = received.into_iter().map(|(bytes, _)| bytes).collect();
-            for update in self.collab.remote(&mut app.session, updates, js_sys::Date::now()) {
-                self.send(update);
-            }
+            // Held typing goes out first: shared like any edit of this member's.
+            let mine = self.collab.remote(&mut app.session, updates, js_sys::Date::now());
+            self.share(mine);
         }
         if self.loading && self.replayed.get() {
             self.loading = false;

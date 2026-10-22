@@ -231,6 +231,18 @@ pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> Opti
         };
     }
     fields!(field);
+    // Fields that hold paragraphs are repaired like spliced blocks (sound ones stay shared).
+    let sent = |k: &str| patch.f.iter().any(|f| f.k == k);
+    let mut blocks: Vec<&mut Blocks> = vec![];
+    for (k, seps) in [("footnoteSeparators", &mut out.footnote_separators), ("endnoteSeparators", &mut out.endnote_separators)] {
+        if sent(k) {
+            blocks.extend([&mut seps.separator, &mut seps.continuation_separator, &mut seps.continuation_notice].into_iter().flatten());
+        }
+    }
+    if sent("glossary") {
+        blocks.extend(out.glossary.iter_mut().map(|g| &mut g.blocks));
+    }
+    blocks.into_iter().flat_map(|b| b.iter_mut()).for_each(|b| repair(Arc::make_mut(b)));
     for k in &patch.mr {
         out.media.remove(k);
     }
@@ -317,6 +329,21 @@ mod tests {
             p.runs = vec![wordcraft_doc::Run { len: 2, props: Default::default() }, wordcraft_doc::Run { len: 3, props: Default::default() }];
         }
         assert_eq!(apply(&a, &diff(&a, &c), &same_place).unwrap(), c);
+    }
+
+    #[test]
+    fn hostile_runs_in_note_separators_are_repaired() {
+        let a = Document::from_text("one");
+        let mut b = a.clone();
+        let mut sep = Document::from_text("----").body;
+        if let Some(Block::Para(p)) = sep.get_mut(0).map(Arc::make_mut) {
+            p.runs =
+                vec![wordcraft_doc::Run { len: usize::MAX, props: Default::default() }, wordcraft_doc::Run { len: 3, props: Default::default() }];
+        }
+        b.footnote_separators.separator = Some(sep);
+        let out = apply(&a, &diff(&a, &b), &same_place).unwrap();
+        let p = out.footnote_separators.separator.as_ref().and_then(|s| s[0].as_para()).unwrap();
+        assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
     }
 
     #[test]
