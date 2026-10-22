@@ -148,7 +148,7 @@ pub struct Collab {
     /// The ops replayed so far, in order, and their ids.
     applied: Vec<Arc<str>>,
     ids: Vec<OpId>,
-    /// Per client, how many of its ops are replayed.
+    /// Per client, the number after its last op replayed (how many, when none went missing).
     counts: BTreeMap<u64, u32>,
     /// The document after n ops.
     states: BTreeMap<usize, State>,
@@ -156,6 +156,10 @@ pub struct Collab {
     replica: Session,
     /// This member and device.
     client: u64,
+    /// This device's next op number, at least: ops it made that the chat never stored (shared only
+    /// over the realtime channel before the app closed) may still be in others' logs, so their
+    /// numbers aren't reused. The host keeps it between runs.
+    pub next: u32,
     /// The shared document as this member's session should hold it.
     expected: Document,
     held: Option<Held>,
@@ -167,8 +171,8 @@ pub struct Collab {
     pub max_op: usize,
     /// An edit was refused this frame: the session goes back to the shared document.
     revert: bool,
-    /// Ops ([`op_hash`]) that crashed this app while replaying (a panic aborts on the web): left
-    /// out, so one bad op can't stop the chat's document from opening. Every member crashes on
+    /// Ops ([`op_hash`]) and updates that crashed this app while replaying or applying them (a
+    /// panic aborts on the web): left out, so one bad op can't stop the chat's document from opening. Every member crashes on
     /// such an op once and leaves it out from then on, so they still agree.
     pub skip: BTreeSet<u64>,
 }
@@ -177,9 +181,15 @@ thread_local! {
     static REPLAYING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-/// The op being replayed ([`op_hash`]), for a panic hook to remember it.
+/// The op being replayed ([`op_hash`]) or the update being applied, for a panic hook to remember.
 pub fn replaying() -> Option<u64> {
     REPLAYING.with(std::cell::Cell::get)
+}
+
+/// Notes op `id` in `counts` ([`Collab::counts`]).
+fn seen(counts: &mut BTreeMap<u64, u32>, (client, n): OpId) {
+    let after = counts.entry(client).or_default();
+    *after = (*after).max(n.saturating_add(1));
 }
 
 /// An op's identity for [`Collab::skip`].
@@ -210,6 +220,7 @@ impl Collab {
             states: [(0, State::base())].into(),
             replica,
             client,
+            next: 0,
             expected: base(),
             held: None,
             undo: vec![],
@@ -318,11 +329,21 @@ impl Collab {
         {
             let mut txn = self.ydoc.transact_mut();
             for bytes in updates {
+                // yrs can panic on a crafted update: like an op that crashed, it is left out from
+                // then on. ponytail: a member it didn't crash keeps it, and may then crash on a
+                // later, sound update instead; a fixed yrs would end that.
+                let hash = patch::hash(&bytes);
+                if self.skip.contains(&hash) {
+                    log::warn!("left out a shared update that crashed this app before");
+                    continue;
+                }
                 match Update::decode_v1(&bytes) {
                     Ok(update) => {
+                        REPLAYING.with(|r| r.set(Some(hash)));
                         if let Err(e) = txn.apply_update(update) {
                             log::warn!("ignored a shared update: {e}");
                         }
+                        REPLAYING.with(|r| r.set(None));
                     }
                     Err(e) => log::warn!("ignored an unreadable shared update: {e}"),
                 }
@@ -387,7 +408,7 @@ impl Collab {
     }
 
     fn op(&self, c: &str, p: Json, sel: Selection, pp: Option<CharProps>, s: &Session, t: u64, d: Option<Patch>) -> Op {
-        let n = self.counts.get(&self.client).copied().unwrap_or(0);
+        let n = self.counts.get(&self.client).copied().unwrap_or(0).max(self.next);
         Op {
             i: (self.client, n),
             k: self.counts.clone(),
@@ -427,7 +448,8 @@ impl Collab {
         }
         self.applied.push(json.into());
         self.ids.push(op.i);
-        *self.counts.entry(op.i.0).or_default() += 1;
+        seen(&mut self.counts, op.i);
+        self.next = self.next.max(op.i.1.saturating_add(1));
         self.states.insert(self.applied.len(), prev.next(&op, after.clone(), sel.as_ref()));
         self.prune();
         self.expected = after;
@@ -500,8 +522,8 @@ impl Collab {
         self.ids.truncate(same);
         self.states.retain(|n, _| *n <= same);
         self.counts.clear();
-        for (c, _) in &self.ids {
-            *self.counts.entry(*c).or_default() += 1;
+        for id in &self.ids {
+            seen(&mut self.counts, *id);
         }
         for json in log.get(same..).unwrap_or_default() {
             let op = serde_json::from_str::<Op>(json).ok();
@@ -509,7 +531,7 @@ impl Collab {
             let n = self.applied.len();
             self.applied.push(json.clone());
             self.ids.push(id);
-            *self.counts.entry(id.0).or_default() += 1;
+            seen(&mut self.counts, id);
             let state = self.state_at(n);
             let next = match op {
                 Some(op) => self.step(n, &op, state),
