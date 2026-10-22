@@ -466,14 +466,14 @@ impl Collab {
             let Some(step) = from.pop() else { break };
             let (old, new) = if redo { (&step.before, &step.after) } else { (&step.after, &step.before) };
             let now = self.expected.clone();
-            let d = locate(&patch::diff(old, new), old, &now);
-            push(to, step);
-            let Some(d) = d else {
+            // A step that can't be taken back any more is dropped: Redo couldn't take it either.
+            let Some(d) = locate(&patch::diff(old, new), old, &now) else {
                 self.refused = Some(
                     if redo { "Someone changed this since; it can't be redone." } else { "Someone changed this since; it can't be undone." }.into(),
                 );
                 continue;
             };
+            push(to, step);
             let op = self.op(&e.id, Json::Null, e.sel.clone(), None, s, e.time, Some(d));
             let after = replay(&mut self.replica, &op, &[], None, now.clone()).0;
             if !patch::diff(&now, &after).is_empty() {
@@ -759,7 +759,11 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<
     let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
     r.sel = sel.clone();
     r.pending = op.pp.clone();
-    r.clipboard = op.cb.clone();
+    r.clipboard = op.cb.clone().map(|mut f| {
+        f.blocks.iter_mut().for_each(patch::repair);
+        f.parts.values_mut().flat_map(|p| p.blocks.iter_mut()).for_each(|b| patch::repair(Arc::make_mut(b)));
+        f
+    });
     r.painter = op.fp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
@@ -796,7 +800,10 @@ fn locate(d: &Patch, old: &Document, now: &Document) -> Option<Patch> {
 
 /// The index nearest `around` (searching outwards) where `hit` holds.
 fn nearest(blocks: &[Arc<wordcraft_doc::Block>], around: usize, hit: impl Fn(usize) -> bool) -> Option<usize> {
-    (0..=blocks.len()).flat_map(|d| [around.checked_add(d), around.checked_sub(d).filter(|_| d > 0)]).flatten().find(|&i| i <= blocks.len() && hit(i))
+    (0..=blocks.len().max(around))
+        .flat_map(|d| [around.checked_add(d), around.checked_sub(d).filter(|_| d > 0)])
+        .flatten()
+        .find(|&i| i <= blocks.len() && hit(i))
 }
 
 #[cfg(test)]

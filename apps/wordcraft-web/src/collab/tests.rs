@@ -204,6 +204,31 @@ fn undo_is_refused_once_someone_changed_the_same_paragraph() {
 }
 
 #[test]
+fn undo_looks_for_its_paragraphs_however_far_they_moved() {
+    // Others deleted 21 paragraphs above a step's: it was at 25, now at 4 of 9.
+    let blocks = Document::from_text(&(0..9).map(|i| i.to_string()).collect::<Vec<_>>().join("\n")).body;
+    assert_eq!(nearest(&blocks, 25, |i| i == 4), Some(4));
+    assert_eq!(nearest(&blocks, 2, |i| i == 9), Some(9));
+    assert_eq!(nearest(&blocks, 25, |_| false), None);
+}
+
+#[test]
+fn a_refused_undo_is_not_offered_again_as_a_redo() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("One", &mut [&mut a, &mut b]);
+    at(&mut a.0, 0, 3);
+    run(&mut a.0, "text.insert", json!({"text": " Ann"}));
+    sync(&mut [&mut a, &mut b]);
+    at(&mut b.0, 0, 0);
+    run(&mut b.0, "text.insert", json!({"text": "Bo: "}));
+    sync(&mut [&mut a, &mut b]);
+    run(&mut a.0, "edit.undo", json!({}));
+    share(&mut a.0, &mut a.1);
+    assert!(a.1.refused.is_some());
+    assert!(a.1.redo.is_empty(), "nothing to redo");
+}
+
+#[test]
 fn typing_is_shared_as_one_op_once_it_pauses() {
     let (mut a, _) = (peer(1, "Ann"), ());
     for (i, ch) in "hello".chars().enumerate() {

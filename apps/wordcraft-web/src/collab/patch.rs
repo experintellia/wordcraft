@@ -188,7 +188,11 @@ pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> Opti
         }
         match &f.v {
             Json::Null => drop(out.parts.remove(&id)),
-            v => drop(out.parts.insert(id, serde_json::from_value(v.clone()).ok()?)),
+            v => {
+                let mut part: wordcraft_doc::Part = serde_json::from_value(v.clone()).ok()?;
+                part.blocks.iter_mut().for_each(|b| repair(Arc::make_mut(b)));
+                drop(out.parts.insert(id, part));
+            }
         }
     }
     // Splices from the last, so earlier indices stay put.
@@ -207,7 +211,14 @@ pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> Opti
         if hash(blocks.get(i..end)?) != s.h {
             return None;
         }
-        blocks.splice(i..end, s.v.iter().map(|b| Arc::new(b.clone())));
+        blocks.splice(
+            i..end,
+            s.v.iter().map(|b| {
+                let mut b = b.clone();
+                repair(&mut b);
+                Arc::new(b)
+            }),
+        );
     }
     macro_rules! field {
         ($f:ident, $k:literal) => {
@@ -228,6 +239,27 @@ pub fn apply(doc: &Document, patch: &Patch, at: &dyn Fn(StoryRef, usize) -> Opti
     }
     out.ensure_nonempty();
     Some(out)
+}
+
+/// Repairs the runs of the paragraphs in `b` that don't cover their text exactly (a hostile op's:
+/// layout trusts them). A sound paragraph stays as it is, so replay keeps the author's document.
+pub fn repair(b: &mut Block) {
+    let mut todo = vec![b];
+    while let Some(b) = todo.pop() {
+        match b {
+            Block::Para(p) => {
+                let mut end = 0usize;
+                let fits = p.runs.iter().all(|r| {
+                    end = end.saturating_add(r.len);
+                    r.len > 0 && p.text.is_char_boundary(end)
+                }) && end == p.text.len();
+                if !fits {
+                    p.normalize();
+                }
+            }
+            Block::Table(t) => todo.extend(t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()).flat_map(|c| c.blocks.iter_mut()).map(Arc::make_mut)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +298,25 @@ mod tests {
         // Elsewhere is fine.
         let elsewhere = Document::from_text("ONE\ntwo");
         assert_eq!(apply(&elsewhere, &p, &same_place).unwrap().plain_text(StoryRef::Body), "ONE\nTWO");
+    }
+
+    #[test]
+    fn hostile_runs_in_a_patch_are_repaired() {
+        let a = Document::from_text("one");
+        let mut b = Document::from_text("two");
+        if let Some(Block::Para(p)) = b.body.get_mut(0).map(Arc::make_mut) {
+            p.runs =
+                vec![wordcraft_doc::Run { len: usize::MAX, props: Default::default() }, wordcraft_doc::Run { len: 3, props: Default::default() }];
+        }
+        let out = apply(&a, &diff(&a, &b), &same_place).unwrap();
+        let p = out.body[0].as_para().unwrap();
+        assert_eq!(p.runs.iter().map(|r| r.len).sum::<usize>(), p.text.len());
+        // A sound paragraph keeps its runs, even ones a merge could join.
+        let mut c = Document::from_text("three");
+        if let Some(Block::Para(p)) = c.body.get_mut(0).map(Arc::make_mut) {
+            p.runs = vec![wordcraft_doc::Run { len: 2, props: Default::default() }, wordcraft_doc::Run { len: 3, props: Default::default() }];
+        }
+        assert_eq!(apply(&a, &diff(&a, &c), &same_place).unwrap(), c);
     }
 
     #[test]
