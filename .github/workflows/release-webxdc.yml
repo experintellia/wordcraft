@@ -1,12 +1,18 @@
 # Builds the webxdc app (packaging/webxdc/package.sh) and attaches it to a GitHub Release as
-# `wordcraft.xdc`. A pushed `v*` tag releases under that tag; a manual run releases under
-# `v<Cargo.toml version>`. An existing release gets its wordcraft.xdc replaced.
+# `wordcraft.xdc`. Fork releases are tagged `v<upstream version>-webxdc.<n>` (plain `v0.9.0` is
+# upstream's tag): pushing such a tag, or creating a release with it, releases under that tag; a
+# manual run takes the tag as input. The release notes are that tag's section of CHANGELOG.md. An
+# existing release gets its wordcraft.xdc replaced.
 name: Release webxdc
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*-webxdc.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.9.0-webxdc.1 (created on webxdc's head if new)"
+        required: true
 
 permissions:
   contents: write
@@ -46,17 +52,20 @@ jobs:
           packaging/webxdc/package.sh
           . packaging/env.sh
           cp "$DIST/wordcraft-$VERSION.xdc" wordcraft.xdc
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Publish to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"; else TAG="v$VERSION"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"; else TAG="$INPUT_TAG"; fi
+          case "$TAG" in v*-webxdc.*) ;; *) echo "::error::tag $TAG isn't v<version>-webxdc.<n>"; exit 1 ;; esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" wordcraft.xdc --clobber
           else
+            # The tag's section of CHANGELOG.md, without its heading.
+            awk -v tag="$TAG" '/^## /{p = ($2 == tag); next} p' CHANGELOG.md > notes.md
+            [ -s notes.md ] || echo "WordCraft as a webxdc app: send wordcraft.xdc to a Delta Chat chat; everyone who opens it edits the same document." > notes.md
             gh release create "$TAG" wordcraft.xdc --target "$GITHUB_SHA" \
-              --title "WordCraft $TAG (webxdc)" \
-              --notes "WordCraft as a webxdc app: send wordcraft.xdc to a Delta Chat chat; everyone who opens it edits the same document."
+              --title "WordCraft $TAG (webxdc)" --notes-file notes.md
           fi
