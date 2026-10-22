@@ -2667,7 +2667,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 // by picture (same pattern as the comment editor in panes.rs).
                 let key = egui::Id::new(("picture_alt", media.clone(), off));
                 let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
-                let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
+                let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text"))));
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(key, alt.clone()));
                 }

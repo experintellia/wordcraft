@@ -1484,6 +1484,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
+        // The platform text input (IME, the on-screen keyboard) follows the caret; on a touch
+        // screen only once a tap on the page brought the keyboard up (`touch`).
+        let takes_typing = focused && crate::touch::page_takes_typing(ui.ctx());
         // After an automatic change, the web's text agent starts afresh (`keys::note_automatic_change`).
         // Only there: on X11 an interrupt recreates the input context and fcitx drops later keys (#1169).
         let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && cfg!(target_arch = "wasm32") && app.canvas.ime_preedit.is_empty();
@@ -1514,6 +1517,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if focused {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+                }
+                if takes_typing {
                     let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
                     ui.ctx().output_mut(|o| {
                         o.ime = Some(egui::output::IMEOutput {
@@ -1556,7 +1561,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             // IME candidate window placement.
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
-            if focused {
+            if takes_typing {
                 ui.ctx().output_mut(|o| {
                     o.ime = Some(egui::output::IMEOutput {
                         rect: cr,
@@ -1614,6 +1619,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // the scroll area is built, so it reads last frame's viewport.
     app.canvas.viewport = Some(out.inner_rect);
     let (resp, rects) = out.inner;
+    // On a touch screen a tap on the visible pages types there (`touch`); not in Read Mode, nor
+    // while a pen owns the pointer.
+    if !app.session.view.read_mode && app.session.view.draw.mode == wordcraft_engine::cmd::draw::DrawMode::Select {
+        for r in &rects {
+            crate::touch::page_zone(ui.ctx(), r.intersect(out.inner_rect), ui.layer_id());
+        }
+    }
     // A click on the page leaves the selected comment balloon.
     if app.canvas.balloon.is_some()
         && ui.input(|i| i.pointer.any_pressed())

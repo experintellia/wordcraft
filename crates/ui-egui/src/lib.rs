@@ -82,6 +82,7 @@ pub mod table_pen;
 pub mod table_resize;
 pub mod table_ruler;
 pub mod theme;
+pub mod touch;
 pub mod widgets;
 pub mod window_close;
 pub mod window_geometry;
@@ -94,6 +95,10 @@ use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
+pub(crate) use touch::text_zone;
+pub use touch::{
+    finger_events, keyboard_up, long_press_events, page_zones, set_keyboard_up, set_touch_screen, tap_text_zone, text_zones, touch_screen,
+};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -2268,6 +2273,22 @@ impl WordApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
         let ctx = ui.ctx().clone();
+        // A tap on the web shell's text input over a page or a text field (`touch`): a click on
+        // the page there, or the field takes the keyboard (within the pass, so it sees the focus).
+        match touch::begin_pass(&ctx) {
+            Some(touch::Tap::Page(p)) => {
+                self.canvas.want_focus = true;
+                self.canvas.focused = true;
+                self.synthetic.extend([true, false].map(|pressed| egui::Event::PointerButton {
+                    pos: p,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }));
+            }
+            Some(touch::Tap::Field(id)) => ctx.memory_mut(|m| m.request_focus(id)),
+            None => {}
+        }
         i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         // Animation effects off: egui's scroll areas get a wheel notch whole, not eased in.
         if !self.animations_on() {

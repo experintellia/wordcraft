@@ -273,7 +273,7 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
         if let Some(name) = &mut f.renaming {
             ui.horizontal(|ui| {
                 ui.label(tl!("Name:"));
-                let r = ui.add(egui::TextEdit::singleline(name).desired_width(140.0));
+                let r = crate::text_zone(ui.add(egui::TextEdit::singleline(name).desired_width(140.0)));
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 // macOS puts Cancel before OK.
                 let mac = cfg!(target_os = "macos");

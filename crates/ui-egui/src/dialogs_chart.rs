@@ -260,7 +260,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 ui.add_sized([CELL_W, ROW_H - 4.0], egui::Label::new(egui::RichText::new(tl!("Categories")).strong()));
                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                 for (j, n) in f.names.iter_mut().enumerate() {
-                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name")));
+                    crate::text_zone(ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name"))));
                     let x = ui
                         .add_enabled_ui(can_remove_series, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
                         .inner
@@ -276,7 +276,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 for i in range {
                     ui.horizontal(|ui| {
                         if let Some(c) = f.categories.get_mut(i) {
-                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c));
+                            crate::text_zone(ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c)));
                         }
                         let x = ui
                             .add_enabled_ui(can_remove_row, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
@@ -287,7 +287,9 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                         }
                         if let Some(row) = f.cells.get_mut(i) {
                             for cell in row.iter_mut() {
-                                ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(cell).horizontal_align(egui::Align::Max));
+                                crate::text_zone(
+                                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(cell).horizontal_align(egui::Align::Max)),
+                                );
                                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                             }
                         }

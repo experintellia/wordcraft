@@ -527,12 +527,12 @@ impl EnvelopeForm {
 
 fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm) -> bool {
     ui.label(tl!("Delivery address:"));
-    ui.add(egui::TextEdit::multiline(&mut f.delivery).desired_rows(4).desired_width(340.0));
+    crate::text_zone(ui.add(egui::TextEdit::multiline(&mut f.delivery).desired_rows(4).desired_width(340.0)));
     ui.horizontal(|ui| {
         ui.label(tl!("Return address:"));
         ui.checkbox(&mut f.omit_return, tl!("Omit"));
     });
-    ui.add_enabled(!f.omit_return, egui::TextEdit::multiline(&mut f.ret).desired_rows(3).desired_width(340.0));
+    crate::text_zone(ui.add_enabled(!f.omit_return, egui::TextEdit::multiline(&mut f.ret).desired_rows(3).desired_width(340.0)));
     ui.horizontal(|ui| {
         ui.label(tl!("Envelope size:"));
         let label = |i: usize| ENVELOPE_SIZES.get(i).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap_or_default();
@@ -649,7 +649,7 @@ fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> bool {
     }
     ui.add_enabled_ui(!(has_recipients && f.recipients && !f.single), |ui| {
         ui.label(tl!("Address:"));
-        ui.add(egui::TextEdit::multiline(&mut f.text).desired_rows(4).desired_width(340.0));
+        crate::text_zone(ui.add(egui::TextEdit::multiline(&mut f.text).desired_rows(4).desired_width(340.0)));
     });
     ui.horizontal(|ui| {
         ui.label(tl!("Label:"));
@@ -731,7 +731,7 @@ impl FormulaForm {
 
 fn formula_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FormulaForm) -> bool {
     ui.label(tl!("Formula:"));
-    ui.add(egui::TextEdit::singleline(&mut f.formula).desired_width(300.0));
+    crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.formula).desired_width(300.0)));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Paste function:"));
@@ -1071,7 +1071,7 @@ fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> 
     heading(ui, "AutoFit behavior");
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
-        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
+        crate::text_zone(ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0)));
     });
     ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
     ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
@@ -1083,7 +1083,7 @@ fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> 
         ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
         ui.horizontal(|ui| {
             ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-            let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+            let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0)));
             if r.changed() {
                 f.separator = "other".into();
             }

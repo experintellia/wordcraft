@@ -69,7 +69,7 @@ pub fn templates(app: &mut WordApp, ui: &mut Ui, f: &mut TemplatesForm) -> bool 
     }
     ui.label(egui::RichText::new(tl!("Document template:")).font(semibold(12.5)));
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0)));
         if ui.add_enabled(can_pick(app), egui::Button::new(tl!("Attach…"))).clicked() {
             pick(app);
         }
@@ -234,7 +234,7 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(tl!("Name:"));
-            let r = ui.add(egui::TextEdit::singleline(new).desired_width(220.0));
+            let r = crate::text_zone(ui.add(egui::TextEdit::singleline(new).desired_width(220.0)));
             renamed = ui.button(tl!("OK")).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         });
     }

@@ -2,12 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, interactive-widget=resizes-content">
   <title>WordCraft</title>
   <link data-trunk rel="icon" href="../../assets/app-icon/wordcraft.ico" />
   <link data-trunk rel="rust" data-bin="wordcraft-web" data-cargo-profile="wasm-release" data-wasm-opt="z" data-weak-refs />
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #e6e6e6; }
+    /* No double-tap zoom: iOS ignores user-scalable=no and would take a tap that follows another
+       as a double tap, which the text input over the page never gets (no keyboard). */
+    html { touch-action: manipulation; }
     #wordcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
     #wordcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
       color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }

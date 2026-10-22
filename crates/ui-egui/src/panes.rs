@@ -109,6 +109,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     }
     let mut out = egui::TextEdit::singleline(&mut q).hint_text(tl!("Search document")).desired_width(f32::INFINITY).show(ui);
     let r = out.response.clone();
+    crate::text_zone(r.response.clone());
     if focus {
         // Focused with its text selected, so typing replaces it.
         r.request_focus();
@@ -466,7 +467,7 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
     if let Some(f) = font {
         edit = edit.font(f);
     }
-    let r = ui.add(edit);
+    let r = crate::text_zone(ui.add(edit));
     if focus {
         r.request_focus();
     }
@@ -526,7 +527,7 @@ pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option
     if let Some(f) = font {
         edit = edit.font(f);
     }
-    let r = ui.add(edit);
+    let r = crate::text_zone(ui.add(edit));
     if focus {
         r.request_focus();
     }
