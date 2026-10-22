@@ -607,6 +607,23 @@ fn op_numbers_are_not_reused_after_a_restart() {
     assert!(new.1 > lost.1, "{new:?} reuses the number of {lost:?}");
 }
 
+#[test]
+fn a_forged_op_number_leaves_a_members_numbering_alone() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Text", &mut [&mut a, &mut b]);
+    sync(&mut [&mut a, &mut b]);
+    // Bo's app forges an op in Ann's name, numbered far ahead.
+    let mut forged: Op = serde_json::from_str(a.1.applied.last().map(|j| &**j).unwrap()).unwrap();
+    forged.i = (1, u32::MAX - 1);
+    let update = b.1.append(&serde_json::to_string(&forged).unwrap());
+    a.1.remote(&mut a.0, vec![update], LATER);
+    at(&mut a.0, 0, 0);
+    run(&mut a.0, "text.insert", json!({"text": "New "}));
+    share(&mut a.0, &mut a.1);
+    let mine = a.1.ids.iter().rev().find(|(c, n)| *c == 1 && *n < u32::MAX - 1).copied();
+    assert_eq!(a.1.ids.last().copied(), mine, "Ann's numbering went on from her own ops");
+}
+
 /// A 39-byte update (found by fuzzing) that makes yrs 0.28 panic once the document holds two
 /// updates from Yjs client 7.
 const CRASHING_UPDATE: [u8; 39] = [

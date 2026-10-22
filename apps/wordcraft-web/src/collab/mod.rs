@@ -59,6 +59,8 @@ const CHECKPOINTS: usize = 64;
 const TYPING_HOLD_MS: f64 = 700.0;
 /// Deepest position path a shared op may carry.
 const MAX_PATH: usize = 64;
+/// Largest jump in a client's op numbers [`seen`] follows.
+const MAX_OP_GAP: u32 = 4096;
 /// Most steps Undo Actions takes back at once.
 const MAX_UNDO_STEPS: usize = 100;
 
@@ -189,7 +191,11 @@ pub fn replaying() -> Option<u64> {
 /// Notes op `id` in `counts` ([`Collab::counts`]).
 fn seen(counts: &mut BTreeMap<u64, u32>, (client, n): OpId) {
     let after = counts.entry(client).or_default();
-    *after = (*after).max(n.saturating_add(1));
+    // Ops a closed app never stored leave small gaps; a forged number far ahead would take its
+    // client's numbering with it (the op itself still replays).
+    if n <= after.saturating_add(MAX_OP_GAP) {
+        *after = (*after).max(n.saturating_add(1));
+    }
 }
 
 /// An op's identity for [`Collab::skip`].
