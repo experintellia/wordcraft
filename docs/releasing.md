@@ -3,10 +3,12 @@
 > **This fork (`experintellia/wordcraft`, branch `webxdc`) releases only the webxdc app.** The
 > native release workflows (`release.yml`, `windows-arm64.yml`, `freebsd.yml`) are removed here.
 > `.github/workflows/release-webxdc.yml` builds `packaging/webxdc/package.sh` and attaches
-> `wordcraft.xdc` to a GitHub Release: push a `v*` tag (released under that tag), or run it by hand
-> on `webxdc` (released under `v<Cargo.toml version>`). Every pull request gets a preview
-> `wordcraft.xdc` (`.github/workflows/webxdc-preview.yml`). The rest of this page describes
-> upstream's native pipeline.
+> `wordcraft.xdc` to a GitHub Release. Fork tags are `v<upstream version>-webxdc.<n>` (plain
+> `v0.9.0` is upstream's tag). To release: add the tag's section to [`CHANGELOG.md`](../CHANGELOG.md)
+> on `webxdc`, then run the workflow by hand on `webxdc` with the tag (or push the tag); the
+> release notes are that section. Every pull request gets a preview `wordcraft.xdc`
+> (`.github/workflows/webxdc-preview.yml`). The rest of this page describes upstream's native
+> pipeline.
 
 The canonical recipe is [craftrules `release/playbook.md`](https://github.com/storytold/craftrules/blob/main/release/playbook.md);
 this file has the WordCraft specifics.
