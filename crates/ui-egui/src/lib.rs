@@ -191,9 +191,10 @@ pub struct Services {
 /// (no rulers, no title-bar search box or community button, a short status bar).
 pub const PHONE_WIDTH: f32 = 600.0;
 
-/// Whether the window is phone-narrow ([`PHONE_WIDTH`]).
+/// Whether the window is phone-narrow ([`PHONE_WIDTH`]). Only on the web: a narrow desktop window
+/// (or a large interface size) keeps the desktop layout.
 pub fn narrow(ctx: &egui::Context) -> bool {
-    ctx.content_rect().width() < PHONE_WIDTH
+    (cfg!(target_arch = "wasm32") || cfg!(test)) && ctx.content_rect().width() < PHONE_WIDTH
 }
 
 /// Commands a [`Services::single_document`] host leaves out. `file.save` is left out of File,
@@ -205,7 +206,6 @@ pub const NOT_IN_CHAT: &[&str] = &[
     "file.save",
     "file.print",
     "file.printPdf",
-    "file.printMarkup",
     "file.recover",
     "file.autosave",
     "font.add",
@@ -217,6 +217,8 @@ pub const NOT_IN_CHAT: &[&str] = &[
     "ui.makeDefaultApp",
     "ui.recoveryDiscard",
     "ui.startScreen",
+    // The messenger's sandbox can't open links.
+    "ui.discord",
 ];
 
 /// How Save in the Save Changes prompt went.

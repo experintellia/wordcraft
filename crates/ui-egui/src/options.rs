@@ -111,6 +111,19 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
+    // A phone has no room for the list beside the settings: the panes are a menu above them.
+    if crate::narrow(ui.ctx()) {
+        egui::ComboBox::from_id_salt("options_pane").selected_text(tl!(pane_label(&current))).show_ui(ui, |ui| {
+            for id in PANES {
+                if ui.selectable_label(current == id, tl!(pane_label(id))).clicked() {
+                    app.ui.options_pane = id.to_string();
+                }
+            }
+        });
+        ui.add_space(12.0);
+        pane(app, ui, &current);
+        return;
+    }
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(170.0);
@@ -138,18 +151,23 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
         ui.add_space(20.0);
         ui.vertical(|ui| {
             ui.set_max_width(640.0);
-            match current.as_str() {
-                "display" => display(app, ui),
-                "proofing" => proofing(app, ui),
-                "save" => save(app, ui),
-                "language" => language(app, ui),
-                "accessibility" => accessibility(app, ui),
-                "advanced" => advanced(app, ui),
-                "agents" => agents(ui),
-                _ => general(app, ui),
-            }
+            pane(app, ui, &current);
         });
     });
+}
+
+/// The settings of Options pane `current`.
+fn pane(app: &mut WordApp, ui: &mut Ui, current: &str) {
+    match current {
+        "display" => display(app, ui),
+        "proofing" => proofing(app, ui),
+        "save" => save(app, ui),
+        "language" => language(app, ui),
+        "accessibility" => accessibility(app, ui),
+        "advanced" => advanced(app, ui),
+        "agents" => agents(ui),
+        _ => general(app, ui),
+    }
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -190,7 +208,9 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
-    ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    if !app.services.single_document {
+        ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    }
     default_app_button(app, ui);
     ui.add_space(8.0);
     // A document shared in a chat opens the chat's document, never a Start screen.

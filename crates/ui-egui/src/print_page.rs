@@ -348,7 +348,10 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("Plain text (*.txt)", "txt"),
         ("Page image (*.png)", "png"),
     ] {
-        if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+        if ui
+            .add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(ui.available_width().min(320.0), 34.0)))
+            .clicked()
+        {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
