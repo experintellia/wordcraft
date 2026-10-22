@@ -97,7 +97,8 @@ pub use control::ControlRequest;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
 pub(crate) use touch::text_zone;
 pub use touch::{
-    finger_events, keyboard_up, long_press_events, page_zones, set_keyboard_up, set_touch_screen, tap_text_zone, text_zones, touch_screen,
+    finger_events, keyboard_up, long_press_events, page_zones, set_keyboard_up, set_touch_screen, tap_opens_keyboard, tap_text_zone, text_zones,
+    touch_screen,
 };
 
 /// Platform services injected by the host (file dialogs, file I/O).

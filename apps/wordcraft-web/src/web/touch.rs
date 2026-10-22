@@ -74,10 +74,20 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
             return;
         }
         let Some((canvas, input)) = canvas_and_input(canvas_id) else { return };
+        let p = canvas_point(&end_ctx, &canvas, t.client_x(), t.client_y());
+        // A tap on a page that reached the canvas (the first after a mouse or pen, which the input
+        // stood aside for): focus the input from this handler, which opens the keyboard there;
+        // eframe's own listeners place the caret.
+        if e.target().as_ref() == Some(canvas.as_ref()) && wordcraft_ui_egui::tap_opens_keyboard(&end_ctx, p) {
+            let options = web_sys::FocusOptions::new();
+            options.set_prevent_scroll(true);
+            let _ = input.focus_with_options(&options);
+            wordcraft_ui_egui::set_keyboard_up(&end_ctx, true);
+            return;
+        }
         if e.target().as_ref() != Some(input.as_ref()) {
             return;
         }
-        let p = canvas_point(&end_ctx, &canvas, t.client_x(), t.client_y());
         // Already focused (from script, with no keyboard): no focus event follows.
         if is_active(&input) {
             wordcraft_ui_egui::tap_text_zone(&end_ctx, p);
@@ -214,7 +224,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     let hold_ms = hold_ms(ctx) as i32;
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
         let (touch, window, send, at, touches) = (touch.clone(), window.clone(), send.clone(), at.clone(), touches.clone());
-        let ctx = ctx.clone();
         let hold: js_sys::Function = on_hold.as_ref().unchecked_ref::<js_sys::Function>().clone();
         move |e: web_sys::TouchEvent| {
             // The only finger down: a touch still followed lost its end (to another element, the
@@ -249,7 +258,8 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
             // Another finger on the input while egui follows one that began elsewhere (a pinch from
             // the ribbon or between the pages): egui gets its start; eframe's own listeners on the
             // document carry on with its moves and its end.
-            if on_input(&e) && e.touches().length() > 1 && ctx.input(|i| i.any_touches()) {
+            // (Not one of ours, so begun elsewhere, also within the same frame.)
+            if on_input(&e) && e.touches().length() > 1 {
                 send(touches(e.changed_touches(), egui::TouchPhase::Start));
                 e.prevent_default();
                 return;
@@ -339,7 +349,8 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     });
     // A mouse, trackpad or pen in use (an iPad's, a tablet's) goes straight to the canvas: the
     // input takes no pointer events (wheel, hover, pinch, pen strokes reach eframe) until a finger
-    // touches the screen again. That first touch still lands where the input was not.
+    // touches the screen again. That first touch lands on the canvas (a tap on a page still opens
+    // the keyboard: `keyboard_on_tap`).
     let pointer_mode = Rc::new(Cell::new(false));
     let on_pointer = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
         let finger = e.pointer_type() == "touch";
