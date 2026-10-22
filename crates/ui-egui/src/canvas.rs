@@ -1650,6 +1650,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if focus_click || app.canvas.want_focus {
         app.canvas.want_focus = false;
     }
+    // A mouse or trackpad click on the page (no finger): on a touch screen, a keyboard is likely
+    // there too, so the page takes the platform text input (`touch`).
+    if pointer_click && !ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. }))) {
+        crate::touch::note_keyboard(ui.ctx());
+    }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
     if resp.has_focus() {
         ui.memory_mut(|m| {

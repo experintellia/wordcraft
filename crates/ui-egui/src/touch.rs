@@ -11,8 +11,10 @@
 //!
 //! While the keyboard is up ([`keyboard_up`]) the input shrinks back to eframe's 1px field at the
 //! text cursor, and taps reach the canvas as usual. Until a tap on the page brings the keyboard up,
-//! the page asks for no text input on a touch screen (a hardware keyboard still types through the
-//! canvas), so that eframe doesn't focus its input from script with no keyboard to show.
+//! the page asks for no text input on a touch screen, so that eframe doesn't focus its input from
+//! script with no keyboard to show; a key typed or a mouse click on the page asks for it too (a
+//! hardware keyboard is there: dead keys and input methods compose). A page partly under a window,
+//! menu or popup takes taps around it ([`subtract`]).
 //! Nothing here is used where [`set_touch_screen`] is off: desktops are unchanged.
 
 /// The web shell runs on a touch screen (a phone, a tablet): text fields and the page publish
@@ -42,15 +44,26 @@ pub(crate) fn page_takes_typing(ctx: &egui::Context) -> bool {
     !touch_screen(ctx) || keyboard_up(ctx)
 }
 
-/// Where a tap types this frame, in points: the visible pages and the text fields no window, menu
-/// or popup covers. None while the keyboard is up (the input then follows the text cursor).
+/// Where a tap types this frame, in points: the visible pages (in pieces around the windows, menus
+/// and popups over them) and the text fields none of those covers. None while the keyboard is up
+/// (the input then follows the text cursor).
 pub fn text_zones(ctx: &egui::Context) -> Vec<egui::Rect> {
     shown_zones(ctx).into_iter().map(|z| z.rect).collect()
 }
 
-/// The [`text_zones`] over the pages only.
+/// The [`text_zones`] over the pages that nothing covers, even in part: for a browser that can't
+/// clip the input to the zones, which then lies over their bounding box.
 pub fn page_zones(ctx: &egui::Context) -> Vec<egui::Rect> {
-    shown_zones(ctx).into_iter().filter(|z| z.page).map(|z| z.rect).collect()
+    shown_zones(ctx).into_iter().filter(|z| z.page && z.whole).map(|z| z.rect).collect()
+}
+
+/// Notes a key typed on the page from a hardware keyboard (a tablet's): on a touch screen the page
+/// asks for the platform text input from then on, as the keyboard is there, so dead keys and input
+/// methods compose. A mouse click on the page counts the same: no finger, so a keyboard is likely.
+pub(crate) fn note_keyboard(ctx: &egui::Context) {
+    if touch_screen(ctx) && !keyboard_up(ctx) {
+        set_keyboard_up(ctx, true);
+    }
 }
 
 /// The text input over [`text_zones`] was tapped at `p` (points) and took the focus: the next frames
@@ -87,7 +100,7 @@ pub(crate) fn begin_pass(ctx: &egui::Context) -> Option<Tap> {
 /// Publishes a text field's response as one of the [`text_zones`].
 pub(crate) fn text_zone(resp: egui::Response) -> egui::Response {
     if resp.enabled() && touch_screen(&resp.ctx) {
-        add_zone(&resp.ctx, Zone { rect: resp.interact_rect, id: resp.id, layer: resp.layer_id, page: false });
+        add_zone(&resp.ctx, Zone { rect: resp.interact_rect, id: resp.id, layer: resp.layer_id, page: false, whole: true });
     }
     resp
 }
@@ -95,7 +108,7 @@ pub(crate) fn text_zone(resp: egui::Response) -> egui::Response {
 /// Publishes the visible part of a page (in `layer`) as one of the [`text_zones`].
 pub(crate) fn page_zone(ctx: &egui::Context, rect: egui::Rect, layer: egui::LayerId) {
     if rect.is_positive() && touch_screen(ctx) {
-        add_zone(ctx, Zone { rect, id: egui::Id::new(ZONES), layer, page: true });
+        add_zone(ctx, Zone { rect, id: egui::Id::new(ZONES), layer, page: true, whole: true });
     }
 }
 
@@ -132,14 +145,17 @@ struct Zone {
     id: egui::Id,
     layer: egui::LayerId,
     page: bool,
+    /// Nothing covers any of it (a page's pieces around what covers it are not whole).
+    whole: bool,
 }
 
 fn add_zone(ctx: &egui::Context, zone: Zone) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<Zone>>(egui::Id::new(ZONES)).push(zone));
 }
 
-/// The zones no window, menu or popup covers, even in part (their layer is the one at their
-/// centre and no interactable layer above it overlaps them); none while the keyboard is up.
+/// The zones shown: a text field when no window, menu or popup covers it, even in part (its layer
+/// is the one at its centre and no interactable layer above it overlaps it); a page in the pieces
+/// around those. None while the keyboard is up.
 fn shown_zones(ctx: &egui::Context) -> Vec<Zone> {
     if keyboard_up(ctx) {
         return Vec::new();
@@ -148,26 +164,88 @@ fn shown_zones(ctx: &egui::Context) -> Vec<Zone> {
     // Back to front. The root layer (the page, the ribbon) is no area, so isn't listed: every
     // higher order is above it.
     let layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().filter(|l| m.areas().is_visible(l)).collect());
-    let covered = |r: egui::Rect, layer: egui::LayerId| {
+    let over = |r: egui::Rect, layer: egui::LayerId| -> Vec<egui::Rect> {
         let at = layers.iter().position(|l| *l == layer);
         layers
             .iter()
             .enumerate()
             .filter(|(i, l)| at.map_or(l.order > layer.order, |at| *i > at))
             .filter_map(|(_, l)| egui::AreaState::load(ctx, l.id))
-            .any(|a| a.interactable && a.rect().intersects(r))
+            .filter(|a| a.interactable && a.rect().intersects(r))
+            .map(|a| a.rect())
+            .collect()
     };
-    zones
-        .into_iter()
-        .filter(|z| {
-            let r = z.rect.shrink(1.0);
-            let top = ctx.layer_id_at(r.center()).unwrap_or(egui::LayerId::background());
-            r.is_positive() && top == z.layer && !covered(r, z.layer)
-        })
-        .collect()
+    let mut shown = Vec::new();
+    for z in zones {
+        let r = z.rect.shrink(1.0);
+        if !r.is_positive() {
+            continue;
+        }
+        let holes = over(r, z.layer);
+        if z.page {
+            let whole = holes.is_empty();
+            shown.extend(subtract(z.rect, &holes).into_iter().map(|rect| Zone { rect, whole, ..z }));
+        } else if holes.is_empty() && ctx.layer_id_at(r.center()).unwrap_or(egui::LayerId::background()) == z.layer {
+            shown.push(z);
+        }
+    }
+    shown
+}
+
+/// Most pieces a page is cut into around what covers it.
+const MAX_PIECES: usize = 64;
+
+/// `rect` less `holes`, as rectangles that don't overlap (at most [`MAX_PIECES`]).
+pub(crate) fn subtract(rect: egui::Rect, holes: &[egui::Rect]) -> Vec<egui::Rect> {
+    let mut pieces = vec![rect];
+    for h in holes {
+        pieces = pieces
+            .into_iter()
+            .flat_map(|r| {
+                let i = r.intersect(*h);
+                if !i.is_positive() {
+                    return vec![r];
+                }
+                // Above and below it the whole width; beside it its height.
+                [
+                    egui::Rect::from_min_max(r.min, egui::pos2(r.max.x, i.min.y)),
+                    egui::Rect::from_min_max(egui::pos2(r.min.x, i.max.y), r.max),
+                    egui::Rect::from_min_max(egui::pos2(r.min.x, i.min.y), egui::pos2(i.min.x, i.max.y)),
+                    egui::Rect::from_min_max(egui::pos2(i.max.x, i.min.y), egui::pos2(r.max.x, i.max.y)),
+                ]
+                .into_iter()
+                .filter(|p| p.is_positive())
+                .collect()
+            })
+            .take(MAX_PIECES)
+            .collect();
+    }
+    pieces
 }
 
 const TOUCH_SCREEN: &str = "wordcraft.touch_screen";
 const KEYBOARD_UP: &str = "wordcraft.keyboard_up";
 const ZONES: &str = "wordcraft.text_zones";
 const TAPPED: &str = "wordcraft.text_zone_tapped";
+
+#[cfg(test)]
+mod tests {
+    use egui::{Rect, pos2};
+
+    #[test]
+    fn a_page_is_cut_around_what_covers_it() {
+        let page = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+        let toolbar = Rect::from_min_max(pos2(20.0, 30.0), pos2(60.0, 50.0));
+        let menu = Rect::from_min_max(pos2(50.0, 40.0), pos2(150.0, 70.0));
+        let pieces = super::subtract(page, &[toolbar, menu]);
+        let area: f32 = pieces.iter().map(|p| p.area()).sum();
+        let covered = toolbar.area() + menu.intersect(page).area() - toolbar.intersect(menu).area();
+        assert!((area - (page.area() - covered)).abs() < 0.01, "{pieces:?}");
+        for (i, a) in pieces.iter().enumerate() {
+            assert!(!a.intersects(toolbar.shrink(0.1)) && !a.intersects(menu.shrink(0.1)), "no piece under a hole");
+            assert!(pieces.iter().skip(i + 1).all(|b| !a.shrink(0.1).intersects(b.shrink(0.1))), "pieces don't overlap");
+        }
+        assert_eq!(super::subtract(page, &[]), vec![page]);
+        assert!(super::subtract(page, &[page.expand(5.0)]).is_empty(), "a modal's backdrop leaves nothing");
+    }
+}

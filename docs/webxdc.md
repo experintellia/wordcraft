@@ -112,10 +112,13 @@ iOS opens the on-screen keyboard only for a text input the user taps, while efra
 hidden input from script a frame later. On touch screens (`pointer: coarse`) the web shell
 (`apps/wordcraft-web/src/web/touch.rs`, ported from GridCraft's) lays eframe's transparent input
 over the visible pages and every text field (dialogs, the ribbon's boxes, the Navigation pane,
-comments, File, Options: `crates/ui-egui/src/touch.rs`). A tap there focuses it natively, the
-keyboard comes up, and the next frames place the caret where the page was tapped or focus the field.
-Drags (selecting), long presses (the context menu) and pinches (zoom) that begin on the input are
-forwarded to egui; a mouse or trackpad presses egui directly. While the keyboard is up the input
-follows the caret and taps reach the page as usual; until a tap on the page the page asks for no
-keyboard (a hardware keyboard still types). Double-tap zoom is off (`touch-action: manipulation`),
+comments, File, Options: `crates/ui-egui/src/touch.rs`), with holes where a window, menu or popup
+lies over a page. A tap there focuses it natively, the keyboard comes up, and the next frames place
+the caret where the page was tapped or focus the field. Drags (selecting), long presses (the context
+menu) and pinches (zoom, also with the first finger off the page) that begin on the input are
+forwarded to egui. A mouse, trackpad or pen makes the input step aside (`pointer-events: none`)
+until a finger touches the screen again, so wheel, hover and strokes reach the page. While the
+keyboard is up the input follows the caret and taps reach the page as usual. Until a tap, a key
+typed or a mouse click on the page, the page asks for no keyboard; from a hardware key or click on
+it asks for the platform text input, so dead keys and input methods compose. Double-tap zoom is off (`touch-action: manipulation`),
 and iOS's pan to keep the input above the keyboard is undone once it hides. Desktops are unchanged.

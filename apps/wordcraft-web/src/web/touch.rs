@@ -7,7 +7,8 @@
 //! the keyboard comes up; once it has the focus the shell reports the tap
 //! ([`wordcraft_ui_egui::tap_text_zone`]), and the next frames place the caret there or focus the
 //! field. Drags, long presses and pinches that begin on the input are forwarded to egui as eframe
-//! sends them for the canvas ([`forward_gestures`]). While the keyboard is up the input shrinks
+//! sends them for the canvas ([`forward_gestures`]); a mouse, trackpad or pen makes the input step
+//! aside until a finger touches again. While the keyboard is up the input shrinks
 //! back to eframe's 1px field at the text cursor, and iOS's pan to keep it in view is undone once
 //! the keyboard is gone ([`unpan_after_keyboard`]).
 
@@ -62,12 +63,14 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
         }
     });
     let end_ctx = ctx.clone();
+    // Held longer, it's a long press (`forward_gestures`), which prevents its `touchend`.
+    let hold_ms = hold_ms(ctx);
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
         // One finger, lifted soon and near where it went down: a tap, not a drag, a pinch or a
         // long press (which `forward_gestures` took).
         let Some(t) = e.changed_touches().get(0).filter(|_| e.touches().length() == 0 && !e.default_prevented()) else { return };
         let (x, y, at, multi) = start.get();
-        if multi || e.time_stamp() - at > 500.0 || (t.client_x() - x).abs() > TAP_SLOP || (t.client_y() - y).abs() > TAP_SLOP {
+        if multi || e.time_stamp() - at > hold_ms || (t.client_x() - x).abs() > TAP_SLOP || (t.client_y() - y).abs() > TAP_SLOP {
             return;
         }
         let Some((canvas, input)) = canvas_and_input(canvas_id) else { return };
@@ -208,9 +211,10 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         let long_press = long_press.clone();
         move || long_press()
     });
-    let hold_ms = ctx.options(|o| o.input_options.max_click_duration * 1000.0).clamp(0.0, 10_000.0) as i32;
+    let hold_ms = hold_ms(ctx) as i32;
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
         let (touch, window, send, at, touches) = (touch.clone(), window.clone(), send.clone(), at.clone(), touches.clone());
+        let ctx = ctx.clone();
         let hold: js_sys::Function = on_hold.as_ref().unchecked_ref::<js_sys::Function>().clone();
         move |e: web_sys::TouchEvent| {
             // The only finger down: a touch still followed lost its end (to another element, the
@@ -240,6 +244,14 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
                 }
                 e.prevent_default();
                 e.stop_propagation();
+                return;
+            }
+            // Another finger on the input while egui follows one that began elsewhere (a pinch from
+            // the ribbon or between the pages): egui gets its start; eframe's own listeners on the
+            // document carry on with its moves and its end.
+            if on_input(&e) && e.touches().length() > 1 && ctx.input(|i| i.any_touches()) {
+                send(touches(e.changed_touches(), egui::TouchPhase::Start));
+                e.prevent_default();
                 return;
             }
             if let Some(t) = e.changed_touches().get(0).filter(|_| on_input(&e) && e.touches().length() == 1) {
@@ -325,13 +337,32 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
             e.stop_propagation();
         }
     });
-    // A mouse or trackpad button held on the input (which the browser would focus, or select
-    // text in): egui gets the press, and the release from here, as eframe can't tell it's its own.
+    // A mouse, trackpad or pen in use (an iPad's, a tablet's) goes straight to the canvas: the
+    // input takes no pointer events (wheel, hover, pinch, pen strokes reach eframe) until a finger
+    // touches the screen again. That first touch still lands where the input was not.
+    let pointer_mode = Rc::new(Cell::new(false));
+    let on_pointer = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
+        let finger = e.pointer_type() == "touch";
+        if finger == pointer_mode.get()
+            && let Some((_, input)) = canvas_and_input(canvas_id)
+        {
+            let style = input.style();
+            if finger {
+                let _ = style.remove_property("pointer-events");
+            } else {
+                let _ = style.set_property("pointer-events", "none");
+            }
+            pointer_mode.set(!finger);
+        }
+    });
+    // A mouse button pressed on the input before any move took it out of the way (which the
+    // browser would focus, or select text in): egui gets the press, and the release from here, as
+    // eframe can't tell it's its own.
     let mouse: Rc<Cell<Option<egui::PointerButton>>> = Rc::default();
     let on_down = Closure::<dyn FnMut(web_sys::PointerEvent)>::new({
         let (mouse, send, at) = (mouse.clone(), send.clone(), at.clone());
         move |e: web_sys::PointerEvent| {
-            if e.pointer_type() == "touch" || !on_input(&e) {
+            if e.pointer_type() != "mouse" || !on_input(&e) {
                 return;
             }
             let Some(button) = mouse_button(e.button()) else { return };
@@ -373,6 +404,9 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     let _ = document.add_event_listener_with_callback_and_add_event_listener_options("contextmenu", on_menu.as_ref().unchecked_ref(), &options);
     let _ = document.add_event_listener_with_callback_and_add_event_listener_options("pointerdown", on_down.as_ref().unchecked_ref(), &options);
     let _ = document.add_event_listener_with_callback_and_add_event_listener_options("pointerup", on_up.as_ref().unchecked_ref(), &options);
+    for name in ["pointerdown", "pointermove"] {
+        let _ = document.add_event_listener_with_callback_and_add_event_listener_options(name, on_pointer.as_ref().unchecked_ref(), &options);
+    }
     // Listening for the page's lifetime.
     on_hold.forget();
     on_start.forget();
@@ -381,6 +415,12 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     on_menu.forget();
     on_down.forget();
     on_up.forget();
+    on_pointer.forget();
+}
+
+/// How long (ms) a touch held still takes to be a long press: as long as egui waits for one.
+fn hold_ms(ctx: &egui::Context) -> f64 {
+    ctx.options(|o| o.input_options.max_click_duration * 1000.0).clamp(0.0, 10_000.0)
 }
 
 fn mouse_button(button: i16) -> Option<egui::PointerButton> {
