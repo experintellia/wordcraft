@@ -155,21 +155,35 @@ fn a_dialog_over_the_page_cuts_a_hole_in_the_text_input() {
 }
 
 #[test]
-fn a_menu_over_the_page_cuts_a_hole_and_the_page_around_it_still_types() {
+fn a_menu_open_leaves_the_page_to_dismiss_it() {
     let mut h = harness(true);
     let p = end_of_text(&mut h);
+    assert!(wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, p));
     h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::Start, p));
     h.step();
     h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::End, p));
     h.run_steps(2);
     assert!(h.state().canvas.context_menu_open);
-    let (pieces, _) = zones(&mut h);
-    let covers = floating(&h);
-    assert!(!covers.is_empty());
-    assert_around(&pieces, &covers);
-    assert_eq!(wordcraft_ui_egui::tap_text_zone(&h.ctx, covers[0].center()), None, "a tap on the menu reaches it");
-    let beside = pieces.iter().map(|z| z.center()).find(|c| covers.iter().all(|m| !m.contains(*c))).unwrap();
-    assert!(wordcraft_ui_egui::tap_text_zone(&h.ctx, beside).is_some(), "the page beside the menu still types");
+    let (text, pages) = zones(&mut h);
+    assert!(
+        pages.is_empty() && text.iter().all(|z| z.bottom() < p.y - 40.0),
+        "a tap on the page beside the menu only dismisses it (the ribbon's boxes still type): {text:?}"
+    );
+    assert!(!wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, p), "nor opens the keyboard from the canvas");
+    assert_eq!(wordcraft_ui_egui::tap_text_zone(&h.ctx, p), None);
+}
+
+#[test]
+fn a_tap_that_reaches_the_canvas_on_a_page_opens_the_keyboard() {
+    let mut h = harness(true);
+    let p = end_of_text(&mut h);
+    // The keyboard (a hardware one) is up: the input follows the caret, taps reach the canvas.
+    wordcraft_ui_egui::set_keyboard_up(&h.ctx, true);
+    h.run_steps(2);
+    assert!(zones(&mut h).0.is_empty());
+    assert!(wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, p), "a page under the tap");
+    let ribbon = egui::pos2(p.x, 40.0);
+    assert!(!wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, ribbon), "not the ribbon");
 }
 
 #[test]

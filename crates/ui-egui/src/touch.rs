@@ -57,6 +57,13 @@ pub fn page_zones(ctx: &egui::Context) -> Vec<egui::Rect> {
     shown_zones(ctx).into_iter().filter(|z| z.page && z.whole).map(|z| z.rect).collect()
 }
 
+/// Whether a tap at `p` (points) that reached the canvas instead of the text input lands on a page
+/// taking taps (the input stood aside for a mouse, or the keyboard was up): the web shell then
+/// focuses its input from the touch handler, which opens the keyboard there.
+pub fn tap_opens_keyboard(ctx: &egui::Context, p: egui::Pos2) -> bool {
+    placed_zones(ctx).iter().any(|z| z.page && z.rect.contains(p))
+}
+
 /// Notes a key typed on the page from a hardware keyboard (a tablet's): on a touch screen the page
 /// asks for the platform text input from then on, as the keyboard is there, so dead keys and input
 /// methods compose. A mouse click on the page counts the same: no finger, so a keyboard is likely.
@@ -160,6 +167,11 @@ fn shown_zones(ctx: &egui::Context) -> Vec<Zone> {
     if keyboard_up(ctx) {
         return Vec::new();
     }
+    placed_zones(ctx)
+}
+
+/// The zones as [`shown_zones`] lays them out, whether or not the keyboard is up.
+fn placed_zones(ctx: &egui::Context) -> Vec<Zone> {
     let zones: Vec<Zone> = ctx.data(|d| d.get_temp(egui::Id::new(ZONES))).unwrap_or_default();
     // Back to front. The root layer (the page, the ribbon) is no area, so isn't listed: every
     // higher order is above it.
@@ -175,6 +187,10 @@ fn shown_zones(ctx: &egui::Context) -> Vec<Zone> {
             .map(|a| a.rect())
             .collect()
     };
+    // A menu, drop-down or popup is open (they lie in the foreground; windows and the mini toolbar
+    // in the middle): a tap beside it dismisses it, so the pages take none.
+    let popup = egui::Popup::is_any_open(ctx)
+        || layers.iter().any(|l| l.order >= egui::Order::Foreground && egui::AreaState::load(ctx, l.id).is_some_and(|a| a.interactable));
     let mut shown = Vec::new();
     for z in zones {
         let r = z.rect.shrink(1.0);
@@ -182,6 +198,9 @@ fn shown_zones(ctx: &egui::Context) -> Vec<Zone> {
             continue;
         }
         let holes = over(r, z.layer);
+        if z.page && popup {
+            continue;
+        }
         if z.page {
             let whole = holes.is_empty();
             shown.extend(subtract(z.rect, &holes).into_iter().map(|rect| Zone { rect, whole, ..z }));

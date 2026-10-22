@@ -112,8 +112,10 @@ iOS opens the on-screen keyboard only for a text input the user taps, while efra
 hidden input from script a frame later. On touch screens (`pointer: coarse`) the web shell
 (`apps/wordcraft-web/src/web/touch.rs`, ported from GridCraft's) lays eframe's transparent input
 over the visible pages and every text field (dialogs, the ribbon's boxes, the Navigation pane,
-comments, File, Options: `crates/ui-egui/src/touch.rs`), with holes where a window, menu or popup
-lies over a page. A tap there focuses it natively, the keyboard comes up, and the next frames place
+comments, File, Options: `crates/ui-egui/src/touch.rs`), with holes where a window or the mini
+toolbar lies over a page, and over no page while a menu or popup is open (a tap beside it only
+dismisses it). A tap on a page that reaches the canvas instead (the first after a mouse) focuses the
+input from the touch handler. A tap there focuses it natively, the keyboard comes up, and the next frames place
 the caret where the page was tapped or focus the field. Drags (selecting), long presses (the context
 menu) and pinches (zoom, also with the first finger off the page) that begin on the input are
 forwarded to egui. A mouse, trackpad or pen makes the input step aside (`pointer-events: none`)
