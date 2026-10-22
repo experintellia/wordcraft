@@ -300,7 +300,7 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
     ui.label(tl!("Caption:"));
     ui.horizontal(|ui| {
         ui.label(f.preview());
-        ui.add(egui::TextEdit::singleline(&mut f.text).desired_width(220.0).hint_text(tl!("Caption text")));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.text).desired_width(220.0).hint_text(tl!("Caption text"))));
     });
     ui.add_space(6.0);
     let mut then = None;
@@ -483,7 +483,7 @@ fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) -> Next {
 
 fn new_label_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
     ui.label(tl!("Label:"));
-    let r = ui.add(egui::TextEdit::singleline(&mut f.new_label).desired_width(260.0));
+    let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.new_label).desired_width(260.0)));
     r.request_focus();
     let (ok, cancel) = buttons(ui, tl!("OK"));
     let name: String = f.new_label.chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect::<String>().trim().to_string();
@@ -648,16 +648,16 @@ fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
     heading(ui, "Index");
     egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Main entry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)));
         ui.end_row();
         ui.label(tl!("Subentry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0)));
         ui.end_row();
     });
     heading(ui, "Options");
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
-        ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0));
+        crate::text_zone(ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)));
     });
     ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
     ui.horizontal(|ui| {
@@ -1063,7 +1063,7 @@ fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> Next {
                     "tag" => tl!("Made from the author and year when empty"),
                     _ => "",
                 };
-                ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint));
+                crate::text_zone(ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint)));
             }
             ui.end_row();
         }

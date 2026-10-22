@@ -143,7 +143,7 @@ fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: 
     let key = egui::Id::new(key);
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| current.to_string());
     let edit = if multiline { egui::TextEdit::multiline(&mut text).desired_rows(5) } else { egui::TextEdit::singleline(&mut text) };
-    let r = ui.add_enabled(enabled, edit.desired_width(f32::INFINITY));
+    let r = crate::text_zone(ui.add_enabled(enabled, edit.desired_width(f32::INFINITY)));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
     }

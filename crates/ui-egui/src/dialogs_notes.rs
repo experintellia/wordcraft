@@ -121,7 +121,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
         }
         ui.end_row();
         ui.label(tl!("Custom mark:"));
-        ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.mark).desired_width(60.0).char_limit(10)));
         ui.end_row();
         ui.label(tl!("Start at:"));
         if let Some(v) = f.start.get_mut(k) {

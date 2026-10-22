@@ -202,11 +202,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     app.ui.print.preview = if app.ui.print.range == "all" { 0 } else { current.0.min(total.saturating_sub(1)) };
                 }
                 if app.ui.print.range == "custom" {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut app.ui.print.pages)
-                            .hint_text(tl!("Pages like 1-3, 5"))
-                            .desired_width(260.0)
-                            .char_limit(wordcraft_engine::print::MAX_SPEC_CHARS),
+                    crate::text_zone(
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.ui.print.pages)
+                                .hint_text(tl!("Pages like 1-3, 5"))
+                                .desired_width(260.0)
+                                .char_limit(wordcraft_engine::print::MAX_SPEC_CHARS),
+                        ),
                     );
                 }
                 choice(ui, "print_parity", &mut app.ui.print.parity, &PARITIES);

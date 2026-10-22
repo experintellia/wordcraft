@@ -471,7 +471,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
     let mut rebased = false;
     egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name:"));
-        ui.text_edit_singleline(name);
+        crate::text_zone(ui.text_edit_singleline(name));
         ui.end_row();
         ui.label(tl!("Style based on:"));
         egui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
@@ -512,7 +512,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             {
                 r.font = f;
             }
-            ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0)).on_hover_text(tl!("Size:"));
+            crate::text_zone(ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0))).on_hover_text(tl!("Size:"));
             ui.toggle_value(&mut r.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold"));
             ui.toggle_value(&mut r.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic"));
             ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline"));

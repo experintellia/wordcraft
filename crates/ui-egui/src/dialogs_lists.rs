@@ -191,7 +191,7 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
     heading(ui, "Number format");
     egui::Grid::new("mll_number").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Enter formatting for number:"));
-        ui.text_edit_singleline(&mut l.text);
+        crate::text_zone(ui.text_edit_singleline(&mut l.text));
         ui.end_row();
         ui.label(tl!("Number style for this level:"));
         let current = STYLES.iter().find(|(k, _)| *k == l.format).map(|(_, s)| *s).unwrap_or("");
@@ -247,7 +247,7 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         ui.end_row();
         ui.label(tl!("Font:"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0));
+            crate::text_zone(ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0)));
             ui.checkbox(&mut l.bold, tl!("Bold"));
             ui.checkbox(&mut l.italic, tl!("Italic"));
         });

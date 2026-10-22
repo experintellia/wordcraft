@@ -13,6 +13,7 @@ const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt",
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
+mod touch;
 mod webxdc;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
@@ -39,6 +40,8 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
+                    // Phones and tablets: a tap on the page or a text field opens the on-screen keyboard.
+                    let gestures = touch::install(&cc.egui_ctx, CANVAS_ID);
                     // In a messenger (webxdc) the document is the chat's, laid out with bundled fonts only.
                     let xdc = webxdc::api();
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
@@ -90,7 +93,7 @@ pub fn start() {
                     if let Some(shared) = &shared {
                         webxdc::flush_on_hide(app.clone(), shared.clone());
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false, shared, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, fitted: false, shared, prefs, gestures }))
                 }),
             )
             .await;
@@ -119,6 +122,8 @@ struct WebShell {
     /// Inside a messenger: the shared document.
     shared: Option<Rc<RefCell<webxdc::Shared>>>,
     prefs: crate::prefs::PrefsSync,
+    /// Touch and mouse events for egui that eframe didn't see (`touch`).
+    gestures: touch::Gestures,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -179,6 +184,10 @@ impl eframe::App for WebShell {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Ahead of eframe's own: a forwarded press comes before the release eframe saw.
+        let mut events = self.gestures.take();
+        events.append(&mut raw.events);
+        raw.events = events;
         if let Ok(mut app) = self.app.try_borrow_mut() {
             app.raw_input_hook(raw);
         }

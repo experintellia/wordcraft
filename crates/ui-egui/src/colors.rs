@@ -716,7 +716,7 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
         ui.horizontal(|ui| {
             ui.label("#");
             let mut text = d.hex.clone();
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16));
+            let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0).char_limit(16)));
             if r.changed() {
                 d.hex = text.clone();
                 d.set_text(&text);

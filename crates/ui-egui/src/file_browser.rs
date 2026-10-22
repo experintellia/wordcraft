@@ -345,7 +345,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         {
             b.navigate(h);
         }
-        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY));
+        let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY)));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             location_done = true;
             let typed = b.location.clone();
@@ -426,7 +426,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         let label = ui.label(tl!("File name:"));
         // The name field takes what the label (longer in some languages) and the type list leave.
         let width = (ui.available_width() - 170.0).max(120.0);
-        let r = ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(width)).labelled_by(label.id);
+        let r = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(width))).labelled_by(label.id);
         if b.focus_name {
             r.request_focus();
             b.focus_name = false;

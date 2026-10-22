@@ -203,7 +203,9 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
             ui.radio_value(&mut f.original_current, true, tl!("This document"));
             ui.horizontal(|ui| {
                 ui.radio_value(&mut f.original_current, false, "");
-                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file")));
+                crate::text_zone(
+                    ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file"))),
+                );
                 if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
                     pick = Some(false);
                 }
@@ -212,14 +214,14 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
         ui.vertical(|ui| {
             heading(ui, "Revised document");
             ui.horizontal(|ui| {
-                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0));
+                crate::text_zone(ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0)));
                 if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
                     pick = Some(true);
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Label changes with:"));
-                ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0));
+                crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0)));
             });
         });
         ui.end_row();
@@ -438,8 +440,8 @@ fn autocorrect_tab(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
         ui.label(tl!("Replace:"));
         ui.label(tl!("With:"));
         ui.end_row();
-        ui.add(egui::TextEdit::singleline(&mut f.from).desired_width(110.0));
-        ui.add(egui::TextEdit::singleline(&mut f.to).desired_width(260.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.from).desired_width(110.0)));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.to).desired_width(260.0)));
         ui.end_row();
     });
     // The list, filtered to what's typed in Replace (as Word scrolls to it).
@@ -505,7 +507,7 @@ fn exceptions(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
             f.exception = e;
         }
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut f.exception).desired_width(110.0));
+            crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.exception).desired_width(110.0)));
             let known = list.contains(&f.exception.trim().to_lowercase());
             if ui.add_enabled(!f.exception.trim().is_empty() && !known, egui::Button::new(tl!("Add"))).clicked() {
                 let p = json!({"addException": f.exception});
@@ -527,7 +529,7 @@ fn math_tab(ui: &mut Ui, f: &mut AutoCorrectForm) {
     ui.label(egui::RichText::new(tl!("In equations, typing a name after a backslash replaces it with its symbol.")).small().weak());
     ui.horizontal(|ui| {
         ui.label(tl!("Replace:"));
-        ui.add(egui::TextEdit::singleline(&mut f.math_filter).desired_width(140.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(&mut f.math_filter).desired_width(140.0)));
     });
     let filter = f.math_filter.trim().trim_start_matches('\\').to_string();
     egui::ScrollArea::vertical().id_salt("ac_math").max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -706,11 +708,11 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
 fn passwords(ui: &mut Ui, st: &mut RestrictPane, confirm: bool) {
     egui::Grid::new("restrict_pw").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
         ui.label(tl!("Password:"));
-        ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(140.0));
+        crate::text_zone(ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(140.0)));
         ui.end_row();
         if confirm {
             ui.label(tl!("Confirm password:"));
-            ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(140.0));
+            crate::text_zone(ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(140.0)));
             ui.end_row();
         }
     });

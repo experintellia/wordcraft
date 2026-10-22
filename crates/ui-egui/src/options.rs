@@ -212,7 +212,7 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("User name:"));
         let mut n = app.session.author.clone();
-        if ui.add(egui::TextEdit::singleline(&mut n).desired_width(260.0)).changed() {
+        if crate::text_zone(ui.add(egui::TextEdit::singleline(&mut n).desired_width(260.0))).changed() {
             app.session.author = n;
         }
         ui.end_row();
@@ -294,7 +294,9 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let mut folder = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| saved.clone());
     ui.label(tl!("Dictionaries folder:"));
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's usual places")));
+        let r = crate::text_zone(
+            ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's usual places"))),
+        );
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let changed = folder.trim() != saved;
         if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
@@ -383,7 +385,9 @@ fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
     let id = egui::Id::new("options_dictionary_new");
     let mut word = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut word).desired_width(220.0).char_limit(MAX_WORD_CHARS).hint_text(tl!("New word")));
+        let r = crate::text_zone(
+            ui.add(egui::TextEdit::singleline(&mut word).desired_width(220.0).char_limit(MAX_WORD_CHARS).hint_text(tl!("New word"))),
+        );
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let w = word.trim().to_string();
         let ok = !w.is_empty() && !w.chars().any(char::is_whitespace);

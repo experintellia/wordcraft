@@ -1,6 +1,6 @@
 # WordCraft as a webxdc app
 
-_Last updated: 2026-10-19 (character ids for concurrent typing)_
+_Last updated: 2026-10-22 (touch screens: the on-screen keyboard on iOS)_
 
 This fork (`experintellia/wordcraft`, branch `webxdc`) ships WordCraft as a [webxdc](https://webxdc.org/)
 app: one `.xdc` file sent into a Delta Chat (or other messenger) chat, run inside the messenger,
@@ -105,3 +105,17 @@ Below 600 pt (`PHONE_WIDTH`) the chrome keeps what fits: no rulers, the title ba
 its icon, the tab strip drops Share/Editing/Comments so the tabs fit, the status bar keeps the
 page, word count and zoom, dialogs and File's pages stay on screen (and scroll), panes cover the
 page, and the web shell starts with the page fitted to the width.
+
+## Touch screens
+
+iOS opens the on-screen keyboard only for a text input the user taps, while eframe focuses its
+hidden input from script a frame later. On touch screens (`pointer: coarse`) the web shell
+(`apps/wordcraft-web/src/web/touch.rs`, ported from GridCraft's) lays eframe's transparent input
+over the visible pages and every text field (dialogs, the ribbon's boxes, the Navigation pane,
+comments, File, Options: `crates/ui-egui/src/touch.rs`). A tap there focuses it natively, the
+keyboard comes up, and the next frames place the caret where the page was tapped or focus the field.
+Drags (selecting), long presses (the context menu) and pinches (zoom) that begin on the input are
+forwarded to egui; a mouse or trackpad presses egui directly. While the keyboard is up the input
+follows the caret and taps reach the page as usual; until a tap on the page the page asks for no
+keyboard (a hardware keyboard still types). Double-tap zoom is off (`touch-action: manipulation`),
+and iOS's pan to keep the input above the keyboard is undone once it hides. Desktops are unchanged.

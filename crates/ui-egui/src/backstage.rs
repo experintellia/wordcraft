@@ -345,7 +345,7 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "New");
     let id = egui::Id::new("backstage_template_search");
     let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
+    let search = crate::text_zone(ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0)));
     if search.changed() {
         ui.ctx().data_mut(|d| d.insert_temp(id, query.clone()));
     }
@@ -459,7 +459,7 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
         egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
                 let label = ui.label(tl!(l));
-                let r = ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id);
+                let r = crate::text_zone(ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l)))).labelled_by(label.id);
                 if r.changed() {
                     edited = Some(l);
                 }
