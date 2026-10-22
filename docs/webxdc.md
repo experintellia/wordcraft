@@ -1,6 +1,6 @@
 # WordCraft as a webxdc app
 
-_Last updated: 2026-10-22 (touch screens: the on-screen keyboard on iOS)_
+_Last updated: 2026-10-22 (review fixes for the first release; touch screens)_
 
 This fork (`experintellia/wordcraft`, branch `webxdc`) ships WordCraft as a [webxdc](https://webxdc.org/)
 app: one `.xdc` file sent into a Delta Chat (or other messenger) chat, run inside the messenger,
@@ -40,7 +40,8 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
 
 - **Ops in a Yjs array.** Each change becomes an op appended to a `yrs` array; updates travel by
   `sendUpdate` (stored by the messenger, replayed on every start; merged up to `sendUpdateMaxSize`
-  and sent at most every 3 s, and when the page is hidden) and at once over the realtime channel.
+  and sent at most every 3 s, or the messenger's `sendUpdateInterval` when longer, and when the page
+  is hidden) and at once over the realtime channel.
   An update leaves the queue only once handed over; another member's edit that arrived only over
   the realtime channel and nobody stored within 20 s (its author left) is stored by whoever has it.
   Every member replays the same op order from a blank document, each op on a fresh replica session,
@@ -77,7 +78,11 @@ Everyone in the chat edits one document (`apps/wordcraft-web/src/collab`, wired 
 - **Hostile ops** are refused: commands that touch files or name a path, macros, unknown commands,
   positions deeper than 64 levels, patches whose hashes don't match or that are oversized. An edit
   too big for the messenger (`sendUpdateMaxSize`) is taken back with a message. An op that crashes
-  the app while being replayed is remembered on that device and skipped from then on.
+  the app while being replayed, or a Yjs update that crashes it while being applied, is
+  remembered on that device and skipped from then on. Paragraphs a patch or a pasted clipboard
+  brings get their runs repaired when they don't cover their text.
+- **Op ids stay unique:** a device keeps its next op number between runs, so ops it shared only
+  over the realtime channel before closing (and others stored) are never renumbered.
 
 Tests: `cargo test -p wordcraft-web` (a convergence fuzz with three members and shuffled delivery,
 `WORDCRAFT_COLLAB_SEEDS=100` to soak it; undo and redo per member; hostile ops; layout-dependent
@@ -101,10 +106,11 @@ pictures can't be inserted, and ones inside an opened document don't show.
 
 ## Phone width
 
-Below 600 pt (`PHONE_WIDTH`) the chrome keeps what fits: no rulers, the title bar's search shrinks to
-its icon, the tab strip drops Share/Editing/Comments so the tabs fit, the status bar keeps the
-page, word count and zoom, dialogs and File's pages stay on screen (and scroll), panes cover the
-page, and the web shell starts with the page fitted to the width.
+In the web app (never the desktop one), below 600 pt (`PHONE_WIDTH`) the chrome keeps what fits:
+no rulers, the title bar's search shrinks to its icon, upstream's narrow ribbon shows Share/Editing/
+Comments as icons, the status bar keeps the page, word count and zoom, dialogs and File's pages
+stay on screen (and scroll), Options lists its panes as a menu, panes cover the page, and the web
+shell starts with the page fitted to the width.
 
 ## Touch screens
 

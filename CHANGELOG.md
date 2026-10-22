@@ -41,8 +41,8 @@ I-beam pointer shows on white paper on Windows").
 - **Comments and Track Changes** work across the chat. Track Changes is a setting of the document,
   so it is on for everyone.
 - **Quick Parts and AutoText** travel with the document.
-- **Malformed or hostile edits from other members are refused.** An edit that crashed the app is
-  skipped on that device from then on.
+- **Malformed or hostile edits from other members are refused.** An edit, or a shared update,
+  that crashed the app is skipped on that device from then on.
 
 ### Phone width
 - Below 600 pt the app keeps what fits:
@@ -62,3 +62,10 @@ I-beam pointer shows on white paper on Windows").
 - **Undoing an automatic capital** doesn't add an AutoCorrect exception in a chat.
 - **Add Font…** and **Load System Installed Fonts…** still show in the font box, and only report
   that they aren't available.
+- **Comments and parts created at the same time:** when one member deletes a comment (or a header,
+  note or text box) while another creates one, the new one can take the deleted one's number, and
+  a later edit of it by its author can miss. Every member still ends up with the same document.
+- **The log isn't append-only:** a modified app could remove other members' edits from the
+  chat's log.
+- **A second pane on a phone** (say, Comments while Navigation is open) gets almost no width
+  until the first one is closed.
