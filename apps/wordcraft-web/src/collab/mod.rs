@@ -59,6 +59,8 @@ const CHECKPOINTS: usize = 64;
 const TYPING_HOLD_MS: f64 = 700.0;
 /// Deepest position path a shared op may carry.
 const MAX_PATH: usize = 64;
+/// Largest jump in a client's op numbers [`seen`] follows.
+const MAX_OP_GAP: u32 = 4096;
 /// Most steps Undo Actions takes back at once.
 const MAX_UNDO_STEPS: usize = 100;
 
@@ -148,7 +150,7 @@ pub struct Collab {
     /// The ops replayed so far, in order, and their ids.
     applied: Vec<Arc<str>>,
     ids: Vec<OpId>,
-    /// Per client, how many of its ops are replayed.
+    /// Per client, the number after its last op replayed (how many, when none went missing).
     counts: BTreeMap<u64, u32>,
     /// The document after n ops.
     states: BTreeMap<usize, State>,
@@ -156,6 +158,10 @@ pub struct Collab {
     replica: Session,
     /// This member and device.
     client: u64,
+    /// This device's next op number, at least: ops it made that the chat never stored (shared only
+    /// over the realtime channel before the app closed) may still be in others' logs, so their
+    /// numbers aren't reused. The host keeps it between runs.
+    pub next: u32,
     /// The shared document as this member's session should hold it.
     expected: Document,
     held: Option<Held>,
@@ -167,8 +173,8 @@ pub struct Collab {
     pub max_op: usize,
     /// An edit was refused this frame: the session goes back to the shared document.
     revert: bool,
-    /// Ops ([`op_hash`]) that crashed this app while replaying (a panic aborts on the web): left
-    /// out, so one bad op can't stop the chat's document from opening. Every member crashes on
+    /// Ops ([`op_hash`]) and updates that crashed this app while replaying or applying them (a
+    /// panic aborts on the web): left out, so one bad op can't stop the chat's document from opening. Every member crashes on
     /// such an op once and leaves it out from then on, so they still agree.
     pub skip: BTreeSet<u64>,
 }
@@ -177,9 +183,19 @@ thread_local! {
     static REPLAYING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-/// The op being replayed ([`op_hash`]), for a panic hook to remember it.
+/// The op being replayed ([`op_hash`]) or the update being applied, for a panic hook to remember.
 pub fn replaying() -> Option<u64> {
     REPLAYING.with(std::cell::Cell::get)
+}
+
+/// Notes op `id` in `counts` ([`Collab::counts`]).
+fn seen(counts: &mut BTreeMap<u64, u32>, (client, n): OpId) {
+    let after = counts.entry(client).or_default();
+    // Ops a closed app never stored leave small gaps; a forged number far ahead would take its
+    // client's numbering with it (the op itself still replays).
+    if n <= after.saturating_add(MAX_OP_GAP) {
+        *after = (*after).max(n.saturating_add(1));
+    }
 }
 
 /// An op's identity for [`Collab::skip`].
@@ -210,6 +226,7 @@ impl Collab {
             states: [(0, State::base())].into(),
             replica,
             client,
+            next: 0,
             expected: base(),
             held: None,
             undo: vec![],
@@ -318,11 +335,21 @@ impl Collab {
         {
             let mut txn = self.ydoc.transact_mut();
             for bytes in updates {
+                // yrs can panic on a crafted update: like an op that crashed, it is left out from
+                // then on. ponytail: a member it didn't crash keeps it, and may then crash on a
+                // later, sound update instead; a fixed yrs would end that.
+                let hash = patch::hash(&bytes);
+                if self.skip.contains(&hash) {
+                    log::warn!("left out a shared update that crashed this app before");
+                    continue;
+                }
                 match Update::decode_v1(&bytes) {
                     Ok(update) => {
+                        REPLAYING.with(|r| r.set(Some(hash)));
                         if let Err(e) = txn.apply_update(update) {
                             log::warn!("ignored a shared update: {e}");
                         }
+                        REPLAYING.with(|r| r.set(None));
                     }
                     Err(e) => log::warn!("ignored an unreadable shared update: {e}"),
                 }
@@ -387,7 +414,7 @@ impl Collab {
     }
 
     fn op(&self, c: &str, p: Json, sel: Selection, pp: Option<CharProps>, s: &Session, t: u64, d: Option<Patch>) -> Op {
-        let n = self.counts.get(&self.client).copied().unwrap_or(0);
+        let n = self.counts.get(&self.client).copied().unwrap_or(0).max(self.next);
         Op {
             i: (self.client, n),
             k: self.counts.clone(),
@@ -427,7 +454,8 @@ impl Collab {
         }
         self.applied.push(json.into());
         self.ids.push(op.i);
-        *self.counts.entry(op.i.0).or_default() += 1;
+        seen(&mut self.counts, op.i);
+        self.next = self.next.max(op.i.1.saturating_add(1));
         self.states.insert(self.applied.len(), prev.next(&op, after.clone(), sel.as_ref()));
         self.prune();
         self.expected = after;
@@ -444,14 +472,14 @@ impl Collab {
             let Some(step) = from.pop() else { break };
             let (old, new) = if redo { (&step.before, &step.after) } else { (&step.after, &step.before) };
             let now = self.expected.clone();
-            let d = locate(&patch::diff(old, new), old, &now);
-            push(to, step);
-            let Some(d) = d else {
+            // A step that can't be taken back any more is dropped: Redo couldn't take it either.
+            let Some(d) = locate(&patch::diff(old, new), old, &now) else {
                 self.refused = Some(
                     if redo { "Someone changed this since; it can't be redone." } else { "Someone changed this since; it can't be undone." }.into(),
                 );
                 continue;
             };
+            push(to, step);
             let op = self.op(&e.id, Json::Null, e.sel.clone(), None, s, e.time, Some(d));
             let after = replay(&mut self.replica, &op, &[], None, now.clone()).0;
             if !patch::diff(&now, &after).is_empty() {
@@ -500,8 +528,8 @@ impl Collab {
         self.ids.truncate(same);
         self.states.retain(|n, _| *n <= same);
         self.counts.clear();
-        for (c, _) in &self.ids {
-            *self.counts.entry(*c).or_default() += 1;
+        for id in &self.ids {
+            seen(&mut self.counts, *id);
         }
         for json in log.get(same..).unwrap_or_default() {
             let op = serde_json::from_str::<Op>(json).ok();
@@ -509,7 +537,7 @@ impl Collab {
             let n = self.applied.len();
             self.applied.push(json.clone());
             self.ids.push(id);
-            *self.counts.entry(id.0).or_default() += 1;
+            seen(&mut self.counts, id);
             let state = self.state_at(n);
             let next = match op {
                 Some(op) => self.step(n, &op, state),
@@ -737,7 +765,11 @@ fn replay(r: &mut Session, op: &Op, pairs: &[(Document, Document)], ids: Option<
     let sel = Selection { anchor: r.doc.clamp(&anchor), focus: r.doc.clamp(&focus) };
     r.sel = sel.clone();
     r.pending = op.pp.clone();
-    r.clipboard = op.cb.clone();
+    r.clipboard = op.cb.clone().map(|mut f| {
+        f.blocks.iter_mut().for_each(patch::repair);
+        f.parts.values_mut().flat_map(|p| p.blocks.iter_mut()).for_each(|b| patch::repair(Arc::make_mut(b)));
+        f
+    });
     r.painter = op.fp.clone();
     r.author = op.a.clone();
     r.initials = op.ai.clone();
@@ -774,7 +806,10 @@ fn locate(d: &Patch, old: &Document, now: &Document) -> Option<Patch> {
 
 /// The index nearest `around` (searching outwards) where `hit` holds.
 fn nearest(blocks: &[Arc<wordcraft_doc::Block>], around: usize, hit: impl Fn(usize) -> bool) -> Option<usize> {
-    (0..=blocks.len()).flat_map(|d| [around.checked_add(d), around.checked_sub(d).filter(|_| d > 0)]).flatten().find(|&i| i <= blocks.len() && hit(i))
+    (0..=blocks.len().max(around))
+        .flat_map(|d| [around.checked_add(d), around.checked_sub(d).filter(|_| d > 0)])
+        .flatten()
+        .find(|&i| i <= blocks.len() && hit(i))
 }
 
 #[cfg(test)]

@@ -142,6 +142,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-22 | webxdc fork: first release prepared (`v0.9.0-webxdc.1`, [CHANGELOG.md](CHANGELOG.md)). From a review: a crafted shared update can no longer crash every member on every start; op ids stay unique across restarts; Undo finds its paragraphs however far others' deletions moved them; hostile runs in patches are repaired; the phone layout stays out of the desktop app; Options and Export fit a phone; exports from a chat can include markup |
 | 2026-10-21 | webxdc fork: rebased onto upstream (299 commits). Upstream's CI gate replaces the fork's; upstream's narrow ribbon replaces the fork's phone patch. A document's Quick Parts travel in shared edits; the chat name stays the author over stored preferences; Alt-key numbers on the Quick Access Toolbar match the buttons a chat shows |
 | 2026-10-19 | webxdc fork, Phase 3: concurrent typing at the same spot keeps each member's words together. Every character has an id (the op that typed it), an op's selection travels as the characters before it, and replay puts it just after them, whatever the author hadn't seen; the local caret follows others' edits the same way |
 | 2026-10-16 | webxdc fork, Phase 2: shared editing. Everyone in the chat edits one document: each change is an op in a Yjs array (command, selection, author, clock, preferences; a patch of the changed paragraphs when it can't run again elsewhere), replayed in the same order by every member; concurrent typing merges (positions carried through the ops their author hadn't seen, mapped from the documents with a Myers diff); Undo takes back only your own changes; members' carets and selections show live; hostile ops are refused. Convergence fuzz, undo, hostile-op and layout-determinism tests |
@@ -513,6 +514,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Progress log: first webxdc release prepared (fork) |
 | 2026-10-21 | minor | Progress log: webxdc fork rebased onto upstream |
 | 2026-10-19 | minor | Progress log: character ids for concurrent typing (fork) |
 | 2026-10-16 | minor | Progress log: shared editing in a webxdc chat (fork) |

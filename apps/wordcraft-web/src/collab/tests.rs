@@ -204,6 +204,31 @@ fn undo_is_refused_once_someone_changed_the_same_paragraph() {
 }
 
 #[test]
+fn undo_looks_for_its_paragraphs_however_far_they_moved() {
+    // Others deleted 21 paragraphs above a step's: it was at 25, now at 4 of 9.
+    let blocks = Document::from_text(&(0..9).map(|i| i.to_string()).collect::<Vec<_>>().join("\n")).body;
+    assert_eq!(nearest(&blocks, 25, |i| i == 4), Some(4));
+    assert_eq!(nearest(&blocks, 2, |i| i == 9), Some(9));
+    assert_eq!(nearest(&blocks, 25, |_| false), None);
+}
+
+#[test]
+fn a_refused_undo_is_not_offered_again_as_a_redo() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("One", &mut [&mut a, &mut b]);
+    at(&mut a.0, 0, 3);
+    run(&mut a.0, "text.insert", json!({"text": " Ann"}));
+    sync(&mut [&mut a, &mut b]);
+    at(&mut b.0, 0, 0);
+    run(&mut b.0, "text.insert", json!({"text": "Bo: "}));
+    sync(&mut [&mut a, &mut b]);
+    run(&mut a.0, "edit.undo", json!({}));
+    share(&mut a.0, &mut a.1);
+    assert!(a.1.refused.is_some());
+    assert!(a.1.redo.is_empty(), "nothing to redo");
+}
+
+#[test]
 fn typing_is_shared_as_one_op_once_it_pauses() {
     let (mut a, _) = (peer(1, "Ann"), ());
     for (i, ch) in "hello".chars().enumerate() {
@@ -558,6 +583,86 @@ fn an_op_that_crashed_before_is_left_out() {
     b.1.remote(&mut b.0, u, LATER);
     assert_eq!(text(&b.0), "Kept");
     assert!(replaying().is_none(), "the marker is cleared after each op");
+}
+
+#[test]
+fn op_numbers_are_not_reused_after_a_restart() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Text", &mut [&mut a, &mut b]);
+    let stored = a.1.encode_since(&yrs::StateVector::default());
+    // Ann's next edit reaches Bo only over the realtime channel, and Ann's app closes unstored.
+    at(&mut a.0, 0, 4);
+    run(&mut a.0, "text.insert", json!({"text": " lost"}));
+    let realtime = share(&mut a.0, &mut a.1);
+    b.1.remote(&mut b.0, realtime, LATER);
+    // Ann starts again from what the chat stored, with the number the host kept.
+    let mut again = peer(1, "Ann");
+    again.1.next = a.1.next;
+    again.1.remote(&mut again.0, vec![stored], LATER);
+    at(&mut again.0, 0, 0);
+    run(&mut again.0, "text.insert", json!({"text": "New "}));
+    share(&mut again.0, &mut again.1);
+    let (Some(new), Some(lost)) = (again.1.ids.last(), b.1.ids.last()) else { panic!("no ops") };
+    assert_eq!(new.0, lost.0);
+    assert!(new.1 > lost.1, "{new:?} reuses the number of {lost:?}");
+}
+
+#[test]
+fn a_forged_op_number_leaves_a_members_numbering_alone() {
+    let (mut a, mut b) = (peer(1, "Ann"), peer(2, "Bo"));
+    start("Text", &mut [&mut a, &mut b]);
+    sync(&mut [&mut a, &mut b]);
+    // Bo's app forges an op in Ann's name, numbered far ahead.
+    let mut forged: Op = serde_json::from_str(a.1.applied.last().map(|j| &**j).unwrap()).unwrap();
+    forged.i = (1, u32::MAX - 1);
+    let update = b.1.append(&serde_json::to_string(&forged).unwrap());
+    a.1.remote(&mut a.0, vec![update], LATER);
+    at(&mut a.0, 0, 0);
+    run(&mut a.0, "text.insert", json!({"text": "New "}));
+    share(&mut a.0, &mut a.1);
+    let mine = a.1.ids.iter().rev().find(|(c, n)| *c == 1 && *n < u32::MAX - 1).copied();
+    assert_eq!(a.1.ids.last().copied(), mine, "Ann's numbering went on from her own ops");
+}
+
+/// A 39-byte update (found by fuzzing) that makes yrs 0.28 panic once the document holds two
+/// updates from Yjs client 7.
+const CRASHING_UPDATE: [u8; 39] = [
+    1, 1, 7, 144, 1, 136, 74, 7, 0, 1, 119, 5, 26, 123, 34, 111, 112, 34, 58, 49, 44, 34, 120, 34, 58, 34, 104, 101, 108, 108, 111, 32, 119, 111,
+    114, 108, 100, 125, 0,
+];
+
+/// Two updates from Yjs client 7, which [`CRASHING_UPDATE`] needs to crash.
+fn client_7_updates() -> Vec<Vec<u8>> {
+    let d = yrs::Doc::with_client_id(7);
+    let a = d.get_or_insert_array("ops");
+    (0..2)
+        .map(|i| {
+            let mut t = d.transact_mut();
+            let sv = t.state_vector();
+            a.push_back(&mut t, format!("{{\"op\":{i},\"x\":\"hello world\"}}"));
+            t.encode_state_as_update_v1(&sv)
+        })
+        .collect()
+}
+
+#[test]
+fn an_update_that_crashed_before_is_left_out() {
+    let crash = CRASHING_UPDATE.to_vec();
+    // The panic hook learns which update crashed (on the web the panic aborts the app).
+    let mut a = peer(1, "Ann");
+    start("Kept", &mut [&mut a]);
+    a.1.remote(&mut a.0, client_7_updates(), LATER);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.1.remote(&mut a.0, vec![crash.clone()], LATER)));
+    assert!(crashed.is_err(), "yrs still panics on it (drop this test's first half once it doesn't)");
+    assert_eq!(replaying(), Some(patch::hash(&crash)));
+    // The next start leaves it out.
+    let mut b = peer(2, "Bo");
+    start("Kept", &mut [&mut b]);
+    b.1.skip.insert(patch::hash(&crash));
+    b.1.remote(&mut b.0, client_7_updates(), LATER);
+    b.1.remote(&mut b.0, vec![crash], LATER);
+    assert_eq!(text(&b.0), "Kept");
+    assert!(replaying().is_none());
 }
 
 #[test]

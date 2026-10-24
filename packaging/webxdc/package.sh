@@ -41,6 +41,8 @@ name = "WordCraft"
 source_code_url = "https://github.com/experintellia/wordcraft"
 TOML
 copy_docs "$SITE"
+# The bundled fonts are compiled into the wasm: their licences travel with it.
+cp -f "$ROOT/NOTICE" "$ROOT"/assets/fonts/OFL-*.txt "$SITE/"
 OUT="$DIST/wordcraft-$VERSION.xdc"
 rm -f "$OUT"
 # No -9: in zip 3.0 it overrides -n, which would deflate the .gz again.
