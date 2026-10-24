@@ -1125,6 +1125,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // A finger swiped sideways turns the page once it lifts (no fling).
         app.canvas.read_swipe += touch_delta;
+        // A drag that turned into a pinch is no swipe.
+        if app.gestures.pinching() {
+            app.canvas.read_swipe = egui::Vec2::ZERO;
+        }
         if !app.gestures.scrolling() && app.canvas.read_swipe != egui::Vec2::ZERO {
             let swipe = std::mem::take(&mut app.canvas.read_swipe);
             app.gestures.hit_edge();
