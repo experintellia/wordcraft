@@ -422,6 +422,152 @@ fn a_mouse_drag_still_selects_on_desktops() {
     assert!(!h.state().session.sel.is_collapsed(), "the drag selected text");
 }
 
+/// Finger `id`'s events at `pos`, as eframe sends them, and a frame.
+fn finger_id(h: &mut egui_kittest::Harness<'_, WordApp>, id: u64, phase: TouchPhase, pos: Pos2) {
+    h.input_mut().events.extend(wordcraft_ui_egui::finger_events(phase, TouchId(id), pos));
+    step(h);
+}
+
+fn drag_up(h: &mut egui_kittest::Harness<'_, WordApp>, id: u64, p: Pos2, by: f32) {
+    finger_id(h, id, TouchPhase::Start, p);
+    for i in 1..=10 {
+        finger_id(h, id, TouchPhase::Move, p - egui::vec2(0.0, by * i as f32 / 10.0));
+    }
+}
+
+#[test]
+fn a_finger_whose_end_was_lost_doesnt_lock_the_page() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    // A drag whose end nobody reported (lifted over the keyboard, outside the view).
+    drag_up(&mut h, 1, p, 100.0);
+    // The web shell then sees a finger land alone on the screen.
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    let before = h.state().canvas.scroll_offset.y;
+    drag_up(&mut h, 2, p, 100.0);
+    step(&mut h);
+    assert!(h.state().canvas.scroll_offset.y > before + 90.0, "the next drag scrolls");
+    finger_id(&mut h, 2, TouchPhase::End, p);
+    for _ in 0..30 {
+        step(&mut h);
+    }
+    // And a mouse click reaches the page.
+    h.state_mut().run("caret.docStart", json!({})).unwrap();
+    step(&mut h);
+    let start = caret(&h);
+    let click = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let at = p + egui::vec2(0.0, 30.0);
+    h.input_mut().events.extend([egui::Event::PointerMoved(at), click(at, true)]);
+    step(&mut h);
+    h.input_mut().events.push(click(at, false));
+    step(&mut h);
+    assert_ne!(caret(&h), start, "the mouse click placed the caret");
+}
+
+#[test]
+fn a_pinch_ends_and_one_finger_scrolls_again() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    finger_id(&mut h, 1, TouchPhase::Start, p);
+    finger_id(&mut h, 2, TouchPhase::Start, p + egui::vec2(100.0, 0.0));
+    for i in 1..=5 {
+        finger_id(&mut h, 2, TouchPhase::Move, p + egui::vec2(100.0 + 10.0 * i as f32, 0.0));
+    }
+    finger_id(&mut h, 2, TouchPhase::End, p + egui::vec2(150.0, 0.0));
+    finger_id(&mut h, 1, TouchPhase::End, p);
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    let before = h.state().canvas.scroll_offset.y;
+    drag_up(&mut h, 3, p, 100.0);
+    step(&mut h);
+    assert!(h.state().canvas.scroll_offset.y > before + 90.0, "back to one finger: it scrolls");
+    finger_id(&mut h, 3, TouchPhase::End, p);
+}
+
+#[test]
+fn a_finger_on_the_ribbon_passes_through() {
+    let mut h = harness(true);
+    let tab = {
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label("Layout").rect().center()
+    };
+    finger(&mut h, TouchPhase::Start, tab);
+    finger(&mut h, TouchPhase::End, tab);
+    step(&mut h);
+    assert_eq!(h.state().ui.tab, "Layout", "the ribbon tab took the tap");
+}
+
+#[test]
+fn a_cancelled_long_press_opens_no_menu() {
+    let mut h = harness(true);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(&mut h, p);
+    assert!(wordcraft_ui_egui::touch_gestures::long_pressed(&h.ctx));
+    finger(&mut h, TouchPhase::Cancel, p);
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    assert!(!h.state().canvas.context_menu_open);
+    assert_eq!(h.state().session.selected_text().trim(), "Kilns", "the word stays selected");
+    // A tap afterwards still places the caret.
+    let q = end_of_text(&mut h);
+    finger(&mut h, TouchPhase::Start, q);
+    lift(&mut h, q);
+    assert!(h.state().session.sel.is_collapsed());
+    assert_eq!(caret(&h).path, wordcraft_doc::Path(vec![2]));
+}
+
+#[test]
+fn a_double_tap_with_the_keyboard_down_selects_the_word() {
+    let mut h = harness(true);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(40.0, 6.0);
+    // The first tap lands on the web shell's input (the keyboard comes up), the second on the
+    // canvas, a few frames later and a little off.
+    assert!(wordcraft_ui_egui::tap_text_zone(&h.ctx, p).is_some());
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    let q = p + egui::vec2(6.0, 4.0);
+    finger(&mut h, TouchPhase::Start, q);
+    for _ in 0..8 {
+        step(&mut h);
+    }
+    lift(&mut h, q);
+    assert_eq!(h.state().session.selected_text().trim(), "fire", "the double tap selected the word");
+}
+
+#[test]
+fn a_swipe_turns_the_page_in_read_mode() {
+    let mut h = long_document(true);
+    h.state_mut().run("view.readMode", json!({})).unwrap();
+    for _ in 0..30 {
+        step(&mut h);
+    }
+    let p = page_middle(&h);
+    let before = h.state().canvas.scroll_offset.x;
+    finger(&mut h, TouchPhase::Start, p);
+    for i in 1..=8 {
+        finger(&mut h, TouchPhase::Move, p - egui::vec2(10.0 * i as f32, 0.0));
+    }
+    lift(&mut h, p - egui::vec2(80.0, 0.0));
+    for _ in 0..60 {
+        step(&mut h);
+    }
+    let after = h.state().canvas.scroll_offset.x;
+    assert!(after > before + 50.0, "a swipe to the left turns to the next page: {before} -> {after}");
+    // And back.
+    finger(&mut h, TouchPhase::Start, p);
+    for i in 1..=8 {
+        finger(&mut h, TouchPhase::Move, p + egui::vec2(10.0 * i as f32, 0.0));
+    }
+    lift(&mut h, p + egui::vec2(80.0, 0.0));
+    for _ in 0..60 {
+        step(&mut h);
+    }
+    assert!((h.state().canvas.scroll_offset.x - before).abs() < 1.0, "and back");
+}
+
 #[test]
 fn desktops_are_unchanged() {
     let mut h = harness(false);

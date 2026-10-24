@@ -49,28 +49,35 @@ pub fn install(ctx: &egui::Context, canvas_id: &'static str) -> Gestures {
 fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
     let Some(window) = web_sys::window() else { return };
     let Some(document) = window.document() else { return };
-    // Where and when the touch began, and whether a second finger joined it.
-    let start = Rc::new(Cell::new((0, 0, 0.0, false)));
+    // Where the touch began, and whether a second finger joined it.
+    let start = Rc::new(Cell::new((0, 0, false)));
     let start_set = start.clone();
     // Where the input was tapped (in points), waiting for the browser to focus it.
     let tapped = Rc::new(Cell::new(None));
     let tapped_start = tapped.clone();
     let tapped_end = tapped.clone();
+    let start_ctx = ctx.clone();
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
         tapped_start.set(None);
+        // Alone on the screen: whatever finger egui still follows lost its end.
+        if e.touches().length() == 1 {
+            wordcraft_ui_egui::touch_gestures::finger_alone(&start_ctx);
+        }
         if let Some(t) = e.changed_touches().get(0) {
-            start_set.set((t.client_x(), t.client_y(), e.time_stamp(), e.touches().length() > 1));
+            start_set.set((t.client_x(), t.client_y(), e.touches().length() > 1));
         }
     });
     let end_ctx = ctx.clone();
-    // Held longer, it's a long press (`forward_gestures`), which prevents its `touchend`.
-    let hold_ms = hold_ms(ctx);
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
-        // One finger, lifted soon and near where it went down: a tap, not a drag, a pinch or a
-        // long press (which `forward_gestures` took).
+        // One finger, lifted near where it went down: a tap, not a drag, a pinch or a long press
+        // (egui's `touch_gestures` decides that one).
         let Some(t) = e.changed_touches().get(0).filter(|_| e.touches().length() == 0 && !e.default_prevented()) else { return };
-        let (x, y, at, multi) = start.get();
-        if multi || e.time_stamp() - at > hold_ms || (t.client_x() - x).abs() > TAP_SLOP || (t.client_y() - y).abs() > TAP_SLOP {
+        let (x, y, multi) = start.get();
+        if multi
+            || wordcraft_ui_egui::touch_gestures::long_pressed(&end_ctx)
+            || (t.client_x() - x).abs() > TAP_SLOP
+            || (t.client_y() - y).abs() > TAP_SLOP
+        {
             return;
         }
         let Some((canvas, input)) = canvas_and_input(canvas_id) else { return };
@@ -140,13 +147,12 @@ struct Forwarded {
     /// Where the first finger landed, in CSS pixels.
     x: i32,
     y: i32,
-    /// Still maybe a tap, which stays the input's own: focusing it natively opens the keyboard.
+    /// Still maybe a tap, which stays the input's own: focusing it natively opens the keyboard
+    /// (unless egui took it for a long press meanwhile).
     tap: bool,
     /// egui has its touch: from the start on a page (whose fingers egui follows); on a text field
     /// only once it's no tap (a drag, as eframe would report it).
     sent: bool,
-    /// The timeout after which it's no tap but a long press.
-    timer: i32,
 }
 
 /// How far (CSS pixels) a tap may move: farther, it's a drag.
@@ -192,19 +198,8 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         })
     };
 
-    // Held still: a long press (egui sees it by the time), no tap.
-    let on_hold = Closure::<dyn FnMut()>::new({
-        let touch = touch.clone();
-        move || {
-            if let Some(f) = touch.borrow_mut().as_mut() {
-                f.tap = false;
-            }
-        }
-    });
-    let hold_ms = hold_ms(ctx) as i32;
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, at, finger, ctx) = (touch.clone(), window.clone(), send.clone(), at.clone(), finger.clone(), ctx.clone());
-        let hold: js_sys::Function = on_hold.as_ref().unchecked_ref::<js_sys::Function>().clone();
+        let (touch, send, at, finger, ctx) = (touch.clone(), send.clone(), at.clone(), finger.clone(), ctx.clone());
         move |e: web_sys::TouchEvent| {
             let mut followed = touch.borrow_mut();
             // The only finger down: touches still followed lost their end (to another element, the
@@ -212,14 +207,12 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
             if e.touches().length() == 1
                 && let Some(f) = followed.take()
             {
-                window.clear_timeout_with_handle(f.timer);
                 for id in f.ids {
                     send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Cancel, id.into(), at(f.x, f.y)));
                 }
             }
             // Another finger joins ours: no tap (a pinch).
             if let Some(f) = followed.as_mut() {
-                window.clear_timeout_with_handle(f.timer);
                 f.tap = false;
                 if !f.sent {
                     f.sent = true;
@@ -257,20 +250,18 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
                 if page {
                     send(finger(egui::TouchPhase::Start, &t));
                 }
-                let timer = window.set_timeout_with_callback_and_timeout_and_arguments_0(&hold, hold_ms).unwrap_or(0);
-                *followed = Some(Forwarded { ids: vec![t.identifier()], x: t.client_x(), y: t.client_y(), tap: true, sent: page, timer });
+                *followed = Some(Forwarded { ids: vec![t.identifier()], x: t.client_x(), y: t.client_y(), tap: true, sent: page });
             }
         }
     });
     let on_move = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, finger, at) = (touch.clone(), window.clone(), send.clone(), finger.clone(), at.clone());
+        let (touch, send, finger, at) = (touch.clone(), send.clone(), finger.clone(), at.clone());
         move |e: web_sys::TouchEvent| {
             let mut followed = touch.borrow_mut();
             let Some(f) = followed.as_mut() else { return };
             let ours: Vec<web_sys::Touch> = changed(&e).into_iter().filter(|t| f.ids.contains(&t.identifier())).collect();
             for t in ours {
                 if f.tap && ((t.client_x() - f.x).abs() > TAP_SLOP || (t.client_y() - f.y).abs() > TAP_SLOP) {
-                    window.clear_timeout_with_handle(f.timer);
                     f.tap = false;
                 }
                 // A drag from a text field: egui gets it from where it began.
@@ -289,12 +280,12 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         }
     });
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, finger) = (touch.clone(), window.clone(), send.clone(), finger.clone());
+        let (touch, send, finger, ctx) = (touch.clone(), send.clone(), finger.clone(), ctx.clone());
         move |e: web_sys::TouchEvent| {
             let mut followed = touch.borrow_mut();
             let Some(f) = followed.as_mut() else { return };
             let ended = if e.type_() == "touchcancel" { egui::TouchPhase::Cancel } else { egui::TouchPhase::End };
-            let tap = f.tap && ended == egui::TouchPhase::End;
+            let tap = f.tap && ended == egui::TouchPhase::End && !wordcraft_ui_egui::touch_gestures::long_pressed(&ctx);
             let ours: Vec<web_sys::Touch> = changed(&e).into_iter().filter(|t| f.ids.contains(&t.identifier())).collect();
             for t in ours {
                 f.ids.retain(|id| *id != t.identifier());
@@ -309,7 +300,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
             }
             e.stop_propagation();
             if f.ids.is_empty() {
-                window.clear_timeout_with_handle(f.timer);
                 *followed = None;
             }
         }
@@ -401,7 +391,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         let _ = document.add_event_listener_with_callback_and_add_event_listener_options(name, on_pointer.as_ref().unchecked_ref(), &options);
     }
     // Listening for the page's lifetime.
-    on_hold.forget();
     on_start.forget();
     on_move.forget();
     on_end.forget();
@@ -409,11 +398,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     on_down.forget();
     on_up.forget();
     on_pointer.forget();
-}
-
-/// How long (ms) a touch held still takes to be a long press: as long as egui waits for one.
-fn hold_ms(ctx: &egui::Context) -> f64 {
-    ctx.options(|o| o.input_options.max_click_duration * 1000.0).clamp(0.0, 10_000.0)
 }
 
 fn mouse_button(button: i16) -> Option<egui::PointerButton> {
