@@ -29,6 +29,11 @@ const EDGE_MARGIN: f32 = 32.0;
 /// Auto-scroll speed (points/s) at the margin's inner boundary and at (or past) the edge.
 const EDGE_SPEED_MIN: f32 = 45.0;
 const EDGE_SPEED_MAX: f32 = 720.0;
+/// How far (points) a finger swipes sideways in Read Mode to turn the page.
+const READ_SWIPE: f32 = 40.0;
+/// Longest gap (s) and distance (points) between a finger's two taps of a double tap.
+const TOUCH_DOUBLE_TAP_S: f64 = 0.5;
+const TOUCH_DOUBLE_TAP_PT: f32 = 24.0;
 /// Longest frame time trusted for auto-scroll (a stall shouldn't jump the page).
 const EDGE_MAX_DT: f32 = 0.1;
 /// Page textures are kept for pages within this many viewport heights of the view; farther ones
@@ -52,6 +57,8 @@ pub struct CanvasState {
     pub(crate) nav_to_caret: bool,
     /// Touchpad travel not yet converted to an entire reading-column turn.
     read_wheel_accum: f32,
+    /// How far a finger has swiped the page in Read Mode (touch screens), to turn it when it lifts.
+    read_swipe: egui::Vec2,
     /// Last actual viewport seen during a resize, distinct from the committed reading page size.
     read_viewport: Settle,
     /// The same for Web Layout's window-wide text width (#1876).
@@ -127,13 +134,13 @@ pub struct CanvasState {
     /// Middle-click scrolling (#1065).
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
-    pub(crate) scroll_offset: egui::Vec2,
+    pub scroll_offset: egui::Vec2,
     scroll_max: egui::Vec2,
     /// Explicit page turn to apply on the next frame (reading navigation buttons/keys).
     scroll_request: Option<egui::Vec2>,
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
-    pub(crate) viewport: Option<egui::Rect>,
+    pub viewport: Option<egui::Rect>,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -226,6 +233,7 @@ impl Default for CanvasState {
             keep_view: false,
             nav_to_caret: false,
             read_wheel_accum: 0.0,
+            read_swipe: egui::Vec2::ZERO,
             read_viewport: Settle::default(),
             web_viewport: Settle::default(),
             read_force_reflow: false,
@@ -1108,10 +1116,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let wheel_area = if app.session.view.read_mode { full } else { area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    // A finger dragging (or flinging) the page on a touch screen (`touch_gestures`).
+    let touch_delta = app.gestures.take_scroll(ui.input(|i| i.stable_dt));
     let wheel_delta = if app.session.view.read_mode {
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {
             turn_read_page(app, turns.signum() as f32);
+        }
+        // A finger swiped sideways turns the page once it lifts (no fling).
+        app.canvas.read_swipe += touch_delta;
+        // A drag that turned into a pinch is no swipe.
+        if app.gestures.pinching() {
+            app.canvas.read_swipe = egui::Vec2::ZERO;
+        }
+        if !app.gestures.scrolling() && app.canvas.read_swipe != egui::Vec2::ZERO {
+            let swipe = std::mem::take(&mut app.canvas.read_swipe);
+            app.gestures.hit_edge();
+            if swipe.x.abs() >= READ_SWIPE && swipe.x.abs() > swipe.y.abs() {
+                turn_read_page(app, -swipe.x.signum());
+            }
         }
         if let Some(page) = app.canvas.read_target_page {
             let step = app.session.view.read_width * geo.scale + GAP;
@@ -1158,7 +1181,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     } else {
         app.canvas.auto_scroll.update(ui, area)
     };
-    let delta = wheel_delta + auto_delta + middle_delta;
+    let touch_delta = if app.session.view.read_mode { egui::Vec2::ZERO } else { touch_delta };
+    let delta = wheel_delta + auto_delta + middle_delta + touch_delta;
     let mut scroll_area = egui::ScrollArea::both()
         .id_salt("canvas_scroll")
         .auto_shrink([false, false])
@@ -1179,6 +1203,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         };
         if after == before && wheel_delta != egui::Vec2::ZERO {
             app.canvas.wheel.hit_edge();
+        }
+        if after == before && touch_delta != egui::Vec2::ZERO {
+            app.gestures.hit_edge();
         }
         if auto_delta != egui::Vec2::ZERO && after != before {
             // The scroll keeps going without new input.
@@ -1652,7 +1679,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     // A mouse or trackpad click on the page (no finger): on a touch screen, a keyboard is likely
     // there too, so the page takes the platform text input (`touch`).
-    if pointer_click && !ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. }))) {
+    if pointer_click && !app.gestures.finger() && !ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. }))) {
         crate::touch::note_keyboard(ui.ctx());
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
@@ -2460,6 +2487,9 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     if pressed {
         let now = ui.input(|i| i.time);
         let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
+        // A finger's double tap is slower and looser than a mouse's double click (and its first
+        // tap may have opened the keyboard on the way).
+        let (delay, dist) = if app.gestures.finger() { (delay.max(TOUCH_DOUBLE_TAP_S), dist.max(TOUCH_DOUBLE_TAP_PT)) } else { (delay, dist) };
         let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
         app.canvas.last_press = Some((now, p, clicks));
         app.canvas.unit_drag = None;

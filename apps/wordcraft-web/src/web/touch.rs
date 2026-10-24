@@ -12,7 +12,7 @@
 //! back to eframe's 1px field at the text cursor, and iOS's pan to keep it in view is undone once
 //! the keyboard is gone ([`unpan_after_keyboard`]).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -49,28 +49,35 @@ pub fn install(ctx: &egui::Context, canvas_id: &'static str) -> Gestures {
 fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
     let Some(window) = web_sys::window() else { return };
     let Some(document) = window.document() else { return };
-    // Where and when the touch began, and whether a second finger joined it.
-    let start = Rc::new(Cell::new((0, 0, 0.0, false)));
+    // Where the touch began, and whether a second finger joined it.
+    let start = Rc::new(Cell::new((0, 0, false)));
     let start_set = start.clone();
     // Where the input was tapped (in points), waiting for the browser to focus it.
     let tapped = Rc::new(Cell::new(None));
     let tapped_start = tapped.clone();
     let tapped_end = tapped.clone();
+    let start_ctx = ctx.clone();
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
         tapped_start.set(None);
+        // Alone on the screen: whatever finger egui still follows lost its end.
+        if e.touches().length() == 1 {
+            wordcraft_ui_egui::touch_gestures::finger_alone(&start_ctx);
+        }
         if let Some(t) = e.changed_touches().get(0) {
-            start_set.set((t.client_x(), t.client_y(), e.time_stamp(), e.touches().length() > 1));
+            start_set.set((t.client_x(), t.client_y(), e.touches().length() > 1));
         }
     });
     let end_ctx = ctx.clone();
-    // Held longer, it's a long press (`forward_gestures`), which prevents its `touchend`.
-    let hold_ms = hold_ms(ctx);
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
-        // One finger, lifted soon and near where it went down: a tap, not a drag, a pinch or a
-        // long press (which `forward_gestures` took).
+        // One finger, lifted near where it went down: a tap, not a drag, a pinch or a long press
+        // (egui's `touch_gestures` decides that one).
         let Some(t) = e.changed_touches().get(0).filter(|_| e.touches().length() == 0 && !e.default_prevented()) else { return };
-        let (x, y, at, multi) = start.get();
-        if multi || e.time_stamp() - at > hold_ms || (t.client_x() - x).abs() > TAP_SLOP || (t.client_y() - y).abs() > TAP_SLOP {
+        let (x, y, multi) = start.get();
+        if multi
+            || wordcraft_ui_egui::touch_gestures::long_pressed(&end_ctx)
+            || (t.client_x() - x).abs() > TAP_SLOP
+            || (t.client_y() - y).abs() > TAP_SLOP
+        {
             return;
         }
         let Some((canvas, input)) = canvas_and_input(canvas_id) else { return };
@@ -133,41 +140,36 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
     check.forget();
 }
 
-/// What a touch that began on the text input has turned into so far.
-#[derive(Clone, Copy, PartialEq)]
-enum Gesture {
-    /// Maybe a tap, which stays the input's own: focusing it natively is what opens the keyboard.
-    Tap,
-    Drag,
-    LongPress,
-    /// Two fingers or more: egui sees the touches only (a pinch zooms).
-    Pinch,
-}
-
-#[derive(Clone, Copy)]
-struct InputTouch {
-    id: i32,
-    /// Where it began (a drag: where it is now), in CSS pixels.
+/// Touches that began on the text input, followed here (eframe's canvas listeners never see them).
+struct Forwarded {
+    /// Their ids, the first finger's first.
+    ids: Vec<i32>,
+    /// Where the first finger landed, in CSS pixels.
     x: i32,
     y: i32,
-    gesture: Gesture,
-    /// The timeout that makes it a long press.
-    timer: i32,
+    /// Still maybe a tap, which stays the input's own: focusing it natively opens the keyboard
+    /// (unless egui took it for a long press meanwhile).
+    tap: bool,
+    /// egui has its touch: from the start on a page (whose fingers egui follows); on a text field
+    /// only once it's no tap (a drag, as eframe would report it).
+    sent: bool,
 }
 
 /// How far (CSS pixels) a tap may move: farther, it's a drag.
 const TAP_SLOP: i32 = 10;
 
-/// Touches that begin on the text input go to the input, not to eframe's canvas listeners. Once one
-/// turns into a drag, a long press or a pinch it belongs to egui: its events go there as eframe
-/// sends a finger on the canvas (a drag selects, as on the canvas), a long press as a held
-/// secondary press (lifted, the page opens its context menu), a pinch as touches; the browser's
-/// own handling (text selection, the text menu, the focus) is prevented. A mouse or trackpad (an
-/// iPad's) presses egui directly, without focusing the input.
+/// Touches that begin on the text input go to egui as eframe sends a finger on the canvas
+/// (`wordcraft_ui_egui::finger_events`): on a page from the start, where `touch_gestures` makes
+/// them a scroll, a long press or a pinch; on a text field once they're no tap. A tap stays the
+/// input's own (the browser focuses it, which opens the keyboard, and the tap clicks the page or
+/// focuses the field from there): egui gets the touch cancelled, or none. For anything but a tap the
+/// browser's handling (the focus, text selection, the text menu) is prevented. eframe's own
+/// `pointerdown` for a finger on the canvas is held back: it comes before the touch, which tells
+/// egui it's a finger. A mouse or trackpad (an iPad's) presses egui directly.
 fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestures) {
     let Some(window) = web_sys::window() else { return };
     let Some(document) = window.document() else { return };
-    let touch: Rc<Cell<Option<InputTouch>>> = Rc::default();
+    let touch: Rc<RefCell<Option<Forwarded>>> = Rc::default();
     let send = {
         let (events, ctx) = (events.clone(), ctx.clone());
         Rc::new(move |more: Vec<egui::Event>| {
@@ -186,163 +188,129 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         })
     };
     let on_input = move |e: &web_sys::Event| canvas_and_input(canvas_id).is_some_and(|(_, input)| e.target().as_ref() == Some(input.as_ref()));
-    // This touch, among the event's changed ones.
-    let find = |e: &web_sys::TouchEvent, id: i32| {
-        (0..e.changed_touches().length()).filter_map(|i| e.changed_touches().get(i)).find(|t| t.identifier() == id)
-    };
-    // Every finger of the event's `list`, as egui touches.
-    let touches = {
+    let on_canvas = move |e: &web_sys::Event| canvas_and_input(canvas_id).is_some_and(|(canvas, _)| e.target().as_ref() == Some(canvas.as_ref()));
+    let changed = |e: &web_sys::TouchEvent| (0..e.changed_touches().length()).filter_map(|i| e.changed_touches().get(i)).collect::<Vec<_>>();
+    // A finger's events for egui.
+    let finger = {
         let at = at.clone();
-        Rc::new(move |list: web_sys::TouchList, phase: egui::TouchPhase| {
-            (0..list.length())
-                .filter_map(|i| list.get(i))
-                .map(|t| egui::Event::Touch {
-                    device_id: egui::TouchDeviceId(0),
-                    id: t.identifier().into(),
-                    phase,
-                    pos: at(t.client_x(), t.client_y()),
-                    force: None,
-                })
-                .collect::<Vec<_>>()
+        Rc::new(move |phase: egui::TouchPhase, t: &web_sys::Touch| {
+            wordcraft_ui_egui::finger_events(phase, t.identifier().into(), at(t.client_x(), t.client_y()))
         })
     };
 
-    // A waiting tap held still turns into a long press.
-    let long_press = {
-        let (touch, send, at) = (touch.clone(), send.clone(), at.clone());
-        Rc::new(move || {
-            let Some(t) = touch.get().filter(|t| t.gesture == Gesture::Tap) else { return };
-            touch.set(Some(InputTouch { gesture: Gesture::LongPress, ..t }));
-            send(wordcraft_ui_egui::long_press_events(egui::TouchPhase::Start, at(t.x, t.y)));
-        })
-    };
-    // Held still as long as egui waits for a long press on the canvas.
-    let on_hold = Closure::<dyn FnMut()>::new({
-        let long_press = long_press.clone();
-        move || long_press()
-    });
-    let hold_ms = hold_ms(ctx) as i32;
     let on_start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, at, touches) = (touch.clone(), window.clone(), send.clone(), at.clone(), touches.clone());
-        let hold: js_sys::Function = on_hold.as_ref().unchecked_ref::<js_sys::Function>().clone();
+        let (touch, send, at, finger, ctx) = (touch.clone(), send.clone(), at.clone(), finger.clone(), ctx.clone());
         move |e: web_sys::TouchEvent| {
-            // The only finger down: a touch still followed lost its end (to another element, the
-            // system), and is done.
+            let mut followed = touch.borrow_mut();
+            // The only finger down: touches still followed lost their end (to another element, the
+            // system), and are done.
             if e.touches().length() == 1
-                && let Some(t) = touch.take()
+                && let Some(f) = followed.take()
             {
-                window.clear_timeout_with_handle(t.timer);
-                let pos = at(t.x, t.y);
-                match t.gesture {
-                    Gesture::Drag => send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Cancel, t.id.into(), pos)),
-                    Gesture::LongPress => send(wordcraft_ui_egui::long_press_events(egui::TouchPhase::Cancel, pos)),
-                    Gesture::Tap | Gesture::Pinch => {}
+                for id in f.ids {
+                    send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Cancel, id.into(), at(f.x, f.y)));
                 }
             }
-            if let Some(t) = touch.get() {
-                // Another finger makes a waiting tap or a drag a pinch (a long press keeps on).
-                if matches!(t.gesture, Gesture::Tap | Gesture::Drag) {
-                    window.clear_timeout_with_handle(t.timer);
-                    if t.gesture == Gesture::Drag {
-                        send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Cancel, t.id.into(), at(t.x, t.y)));
-                    }
-                    send(touches(e.touches(), egui::TouchPhase::Start));
-                    touch.set(Some(InputTouch { gesture: Gesture::Pinch, ..t }));
-                } else if t.gesture == Gesture::Pinch {
-                    send(touches(e.changed_touches(), egui::TouchPhase::Start));
+            // Another finger joins ours: no tap (a pinch).
+            if let Some(f) = followed.as_mut() {
+                f.tap = false;
+                if !f.sent {
+                    f.sent = true;
+                    send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Start, f.ids.first().copied().unwrap_or(0).into(), at(f.x, f.y)));
+                }
+                for t in changed(&e) {
+                    f.ids.push(t.identifier());
+                    send(finger(egui::TouchPhase::Start, &t));
                 }
                 e.prevent_default();
                 e.stop_propagation();
                 return;
             }
+            if !on_input(&e) {
+                return;
+            }
             // Another finger on the input while egui follows one that began elsewhere (a pinch from
-            // the ribbon or between the pages): egui gets its start; eframe's own listeners on the
+            // the ribbon or between the pages): egui gets its touch; eframe's own listeners on the
             // document carry on with its moves and its end.
-            // (Not one of ours, so begun elsewhere, also within the same frame.)
-            if on_input(&e) && e.touches().length() > 1 {
-                send(touches(e.changed_touches(), egui::TouchPhase::Start));
+            if e.touches().length() > 1 {
+                for t in changed(&e) {
+                    send(vec![egui::Event::Touch {
+                        device_id: egui::TouchDeviceId(0),
+                        id: t.identifier().into(),
+                        phase: egui::TouchPhase::Start,
+                        pos: at(t.client_x(), t.client_y()),
+                        force: None,
+                    }]);
+                }
                 e.prevent_default();
                 return;
             }
-            if let Some(t) = e.changed_touches().get(0).filter(|_| on_input(&e) && e.touches().length() == 1) {
-                let timer = window.set_timeout_with_callback_and_timeout_and_arguments_0(&hold, hold_ms).unwrap_or(0);
-                touch.set(Some(InputTouch { id: t.identifier(), x: t.client_x(), y: t.client_y(), gesture: Gesture::Tap, timer }));
+            if let Some(t) = e.changed_touches().get(0) {
+                let page = wordcraft_ui_egui::tap_opens_keyboard(&ctx, at(t.client_x(), t.client_y()));
+                if page {
+                    send(finger(egui::TouchPhase::Start, &t));
+                }
+                *followed = Some(Forwarded { ids: vec![t.identifier()], x: t.client_x(), y: t.client_y(), tap: true, sent: page });
             }
         }
     });
     let on_move = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, at, touches) = (touch.clone(), window.clone(), send.clone(), at.clone(), touches.clone());
+        let (touch, send, finger, at) = (touch.clone(), send.clone(), finger.clone(), at.clone());
         move |e: web_sys::TouchEvent| {
-            let Some(mut t) = touch.get() else { return };
-            if t.gesture == Gesture::Pinch {
-                send(touches(e.changed_touches(), egui::TouchPhase::Move));
-                e.prevent_default();
-                e.stop_propagation();
-                return;
-            }
-            let Some(now) = find(&e, t.id) else { return };
-            if t.gesture == Gesture::Tap {
-                if (now.client_x() - t.x).abs() <= TAP_SLOP && (now.client_y() - t.y).abs() <= TAP_SLOP {
-                    return;
+            let mut followed = touch.borrow_mut();
+            let Some(f) = followed.as_mut() else { return };
+            let ours: Vec<web_sys::Touch> = changed(&e).into_iter().filter(|t| f.ids.contains(&t.identifier())).collect();
+            for t in ours {
+                if f.tap && ((t.client_x() - f.x).abs() > TAP_SLOP || (t.client_y() - f.y).abs() > TAP_SLOP) {
+                    f.tap = false;
                 }
-                window.clear_timeout_with_handle(t.timer);
-                t.gesture = Gesture::Drag;
-                send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Start, t.id.into(), at(t.x, t.y)));
+                // A drag from a text field: egui gets it from where it began.
+                if !f.sent && !f.tap {
+                    f.sent = true;
+                    send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Start, t.identifier().into(), at(f.x, f.y)));
+                }
+                if f.sent {
+                    send(finger(egui::TouchPhase::Move, &t));
+                }
             }
-            let pos = at(now.client_x(), now.client_y());
-            match t.gesture {
-                Gesture::Drag => send(wordcraft_ui_egui::finger_events(egui::TouchPhase::Move, t.id.into(), pos)),
-                Gesture::LongPress => send(wordcraft_ui_egui::long_press_events(egui::TouchPhase::Move, pos)),
-                Gesture::Tap | Gesture::Pinch => {}
+            if !f.tap {
+                e.prevent_default();
             }
-            touch.set(Some(InputTouch { x: now.client_x(), y: now.client_y(), ..t }));
-            e.prevent_default();
             e.stop_propagation();
         }
     });
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, window, send, at, touches) = (touch.clone(), window.clone(), send.clone(), at.clone(), touches.clone());
+        let (touch, send, finger, ctx) = (touch.clone(), send.clone(), finger.clone(), ctx.clone());
         move |e: web_sys::TouchEvent| {
-            let Some(t) = touch.get() else { return };
-            let cancel = e.type_() == "touchcancel";
-            if t.gesture == Gesture::Pinch {
-                send(touches(e.changed_touches(), if cancel { egui::TouchPhase::Cancel } else { egui::TouchPhase::End }));
-                if e.touches().length() == 0 {
-                    touch.set(None);
+            let mut followed = touch.borrow_mut();
+            let Some(f) = followed.as_mut() else { return };
+            let ended = if e.type_() == "touchcancel" { egui::TouchPhase::Cancel } else { egui::TouchPhase::End };
+            let tap = f.tap && ended == egui::TouchPhase::End && !wordcraft_ui_egui::touch_gestures::long_pressed(&ctx);
+            let ours: Vec<web_sys::Touch> = changed(&e).into_iter().filter(|t| f.ids.contains(&t.identifier())).collect();
+            for t in ours {
+                f.ids.retain(|id| *id != t.identifier());
+                // A tap is the input's: egui forgets the touch, the focus clicks the page.
+                if f.sent {
+                    send(finger(if tap { egui::TouchPhase::Cancel } else { ended }, &t));
                 }
+            }
+            if !tap {
+                // No focus (and keyboard) or text menu after it.
                 e.prevent_default();
-                e.stop_propagation();
-                return;
             }
-            let Some(now) = find(&e, t.id) else { return };
-            touch.set(None);
-            let pos = at(now.client_x(), now.client_y());
-            match t.gesture {
-                Gesture::Tap => {
-                    window.clear_timeout_with_handle(t.timer);
-                    return;
-                }
-                Gesture::Drag => {
-                    let phase = if cancel { egui::TouchPhase::Cancel } else { egui::TouchPhase::End };
-                    send(wordcraft_ui_egui::finger_events(phase, t.id.into(), pos));
-                }
-                Gesture::LongPress => send(wordcraft_ui_egui::long_press_events(egui::TouchPhase::End, pos)),
-                Gesture::Pinch => {}
-            }
-            // No focus (and keyboard) or text menu after it, and eframe's own listeners on the
-            // document skip it.
-            e.prevent_default();
             e.stop_propagation();
+            if f.ids.is_empty() {
+                *followed = None;
+            }
         }
     });
-    // Android's own long press comes sooner than egui's (a `contextmenu`, then the text field's
-    // popup): it makes a waiting tap a long press at once, without the popup.
+    // Android's own long press (a `contextmenu`, then the text field's popup): no tap, no popup.
     let on_menu = Closure::<dyn FnMut(web_sys::Event)>::new({
-        let (touch, window) = (touch.clone(), window.clone());
+        let touch = touch.clone();
         move |e: web_sys::Event| {
-            let Some(t) = touch.get().filter(|_| on_input(&e)) else { return };
-            window.clear_timeout_with_handle(t.timer);
-            long_press();
+            let mut followed = touch.borrow_mut();
+            let Some(f) = followed.as_mut().filter(|_| on_input(&e)) else { return };
+            f.tap = false;
             e.prevent_default();
             e.stop_propagation();
         }
@@ -373,6 +341,10 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     let on_down = Closure::<dyn FnMut(web_sys::PointerEvent)>::new({
         let (mouse, send, at) = (mouse.clone(), send.clone(), at.clone());
         move |e: web_sys::PointerEvent| {
+            // A finger on the canvas: its touch events follow, and tell egui it's a finger.
+            if e.pointer_type() == "touch" && on_canvas(&e) {
+                e.stop_propagation();
+            }
             if e.pointer_type() != "mouse" || !on_input(&e) {
                 return;
             }
@@ -387,12 +359,12 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         }
     });
     // Pointer events come first: eframe's `pointerup` on the document would release a forwarded
-    // gesture ahead of its `touchend` (with moves still queued here). The `touchend` alone releases it.
+    // touch ahead of its `touchend`. The `touchend` alone releases it.
     let on_up = Closure::<dyn FnMut(web_sys::PointerEvent)>::new({
         let (touch, send, at) = (touch.clone(), send.clone(), at.clone());
         move |e: web_sys::PointerEvent| {
             if e.pointer_type() == "touch" {
-                if touch.get().is_some_and(|t| t.gesture != Gesture::Tap) {
+                if touch.borrow().is_some() {
                     e.stop_propagation();
                 }
                 return;
@@ -419,7 +391,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         let _ = document.add_event_listener_with_callback_and_add_event_listener_options(name, on_pointer.as_ref().unchecked_ref(), &options);
     }
     // Listening for the page's lifetime.
-    on_hold.forget();
     on_start.forget();
     on_move.forget();
     on_end.forget();
@@ -427,11 +398,6 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
     on_down.forget();
     on_up.forget();
     on_pointer.forget();
-}
-
-/// How long (ms) a touch held still takes to be a long press: as long as egui waits for one.
-fn hold_ms(ctx: &egui::Context) -> f64 {
-    ctx.options(|o| o.input_options.max_click_duration * 1000.0).clamp(0.0, 10_000.0)
 }
 
 fn mouse_button(button: i16) -> Option<egui::PointerButton> {

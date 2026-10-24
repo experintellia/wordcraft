@@ -7,7 +7,7 @@
 //! and the text fields. A tap there lands on the input, the browser focuses it natively (the keyboard
 //! comes up), and the shell reports the tap with [`tap_text_zone`]: the next frames place the caret
 //! where the page was tapped, or focus the field. Drags, long presses and pinches that begin on the
-//! input reach egui as the shell forwards them ([`finger_events`], [`long_press_events`]).
+//! input reach egui as the shell forwards them ([`finger_events`]), where `touch_gestures` reads them.
 //!
 //! While the keyboard is up ([`keyboard_up`]) the input shrinks back to eframe's 1px field at the
 //! text cursor, and taps reach the canvas as usual. Until a tap on the page brings the keyboard up,
@@ -130,19 +130,6 @@ pub fn finger_events(phase: egui::TouchPhase, id: egui::TouchId, pos: egui::Pos2
         TouchPhase::Start => vec![Event::PointerMoved(pos), button(true), touch],
         TouchPhase::Move => vec![Event::PointerMoved(pos), touch],
         TouchPhase::End | TouchPhase::Cancel => vec![button(false), Event::PointerGone, touch],
-    }
-}
-
-/// A long press on the web shell's text input, at `pos` (points): a secondary press held as it
-/// lands, a release as it lifts, so the page opens its context menu (as for a long press eframe
-/// reports).
-pub fn long_press_events(phase: egui::TouchPhase, pos: egui::Pos2) -> Vec<egui::Event> {
-    use egui::{Event, PointerButton, TouchPhase};
-    let button = |pressed| Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
-    match phase {
-        TouchPhase::Start => vec![Event::PointerMoved(pos), button(true)],
-        TouchPhase::Move => vec![Event::PointerMoved(pos)],
-        TouchPhase::End | TouchPhase::Cancel => vec![button(false), Event::PointerGone],
     }
 }
 

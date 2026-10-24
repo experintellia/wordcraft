@@ -1,6 +1,6 @@
 # WordCraft as a webxdc app
 
-_Last updated: 2026-10-22 (touch screens: the on-screen keyboard on iOS)_
+_Last updated: 2026-10-24 (touch screens: a finger scrolls the page, a long press selects)_
 
 This fork (`experintellia/wordcraft`, branch `webxdc`) ships WordCraft as a [webxdc](https://webxdc.org/)
 app: one `.xdc` file sent into a Delta Chat (or other messenger) chat, run inside the messenger,
@@ -114,13 +114,32 @@ hidden input from script a frame later. On touch screens (`pointer: coarse`) the
 over the visible pages and every text field (dialogs, the ribbon's boxes, the Navigation pane,
 comments, File, Options: `crates/ui-egui/src/touch.rs`), with holes where a window or the mini
 toolbar lies over a page, and over no page while a menu or popup is open (a tap beside it only
-dismisses it). A tap on a page that reaches the canvas instead (the first after a mouse) focuses the
-input from the touch handler. A tap there focuses it natively, the keyboard comes up, and the next frames place
-the caret where the page was tapped or focus the field. Drags (selecting), long presses (the context
-menu) and pinches (zoom, also with the first finger off the page) that begin on the input are
-forwarded to egui. A mouse, trackpad or pen makes the input step aside (`pointer-events: none`)
-until a finger touches the screen again, so wheel, hover and strokes reach the page. While the
-keyboard is up the input follows the caret and taps reach the page as usual. Until a tap, a key
-typed or a mouse click on the page, the page asks for no keyboard; from a hardware key or click on
-it asks for the platform text input, so dead keys and input methods compose. Double-tap zoom is off (`touch-action: manipulation`),
-and iOS's pan to keep the input above the keyboard is undone once it hides. Desktops are unchanged.
+dismisses it). A tap there focuses it natively, the keyboard comes up, and the next frames place the
+caret where the page was tapped or focus the field. A tap on a page that reaches the canvas instead
+(the first after a mouse) focuses the input from the touch handler.
+
+A finger on the page (`crates/ui-egui/src/touch_gestures.rs`, reading eframe's touches and those the
+shell forwards from its input):
+
+- **drag**: scrolls the document, both ways when the page is wider than the window, following the
+  finger 1:1 and coasting on after a flick; a new touch stops the coast. A drag never moves the
+  caret or brings the keyboard up, and while the keyboard is up it stays up;
+- **tap**: places the caret (and brings the keyboard up); a double tap selects the word;
+- **long press**: selects the word under the finger, and dragging on without lifting extends the
+  selection word by word (scrolling on near the page's edges); lifted without moving, the context
+  menu opens on the word;
+- **two fingers**: pinch to zoom;
+- **in Read Mode**, a swipe sideways turns the page.
+
+Only egui decides when a touch held still is a long press (the shell asks it before taking a lift
+for a tap). A finger whose end got lost (lifted over the keyboard, outside the view) is dropped when
+the next finger lands alone on the screen.
+
+Scroll areas elsewhere (panes, dialogs, File, the ribbon) drag-scroll with a finger by themselves
+(egui's own touch scrolling). A mouse, trackpad or pen makes the input step aside
+(`pointer-events: none`) until a finger touches the screen again, so wheel, hover and strokes reach
+the page, and they select as on a desktop. While the keyboard is up the input follows the caret and
+taps reach the page as usual. Until a tap, a key typed or a mouse click on the page, the page asks for
+no keyboard; from a hardware key or click on it asks for the platform text input, so dead keys and
+input methods compose. Double-tap zoom is off (`touch-action: manipulation`), and iOS's pan to keep
+the input above the keyboard is undone once it hides. Desktops are unchanged.
