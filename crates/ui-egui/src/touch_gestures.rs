@@ -144,12 +144,20 @@ impl Gestures {
         let ended = match self.phase {
             Phase::Pending { id, start: at, .. } | Phase::Scroll { id, last: at } => vec![touch_event(id, TouchPhase::Cancel, at)],
             Phase::Hold { start, .. } => vec![press(start, PointerButton::Primary, false), Event::PointerGone],
+            // A finger passing through may have pressed egui's pointer (eframe's own events): released too,
+            // or the next finger on the page would pass through instead of scrolling.
+            Phase::Pass { id, at } if self.pointer_down => {
+                vec![touch_event(id, TouchPhase::Cancel, at), press(at, PointerButton::Primary, false), Event::PointerGone]
+            }
             Phase::Pass { id, at } => vec![touch_event(id, TouchPhase::Cancel, at)],
             Phase::Multi => self.pinch.iter().map(|(id, at)| touch_event(*id, TouchPhase::Cancel, *at)).collect(),
             Phase::Idle => Vec::new(),
         };
         // What was queued still goes to egui (a click's release), ahead of the ends.
         let queued: Vec<Event> = self.queue.drain(..).flatten().collect();
+        if matches!(self.phase, Phase::Pass { .. }) {
+            self.pointer_down = false;
+        }
         self.pinch.clear();
         self.momentum.cancel();
         self.phase = Phase::Idle;
