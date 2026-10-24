@@ -128,7 +128,12 @@ shell forwards from its input):
 - **long press**: selects the word under the finger, and dragging on without lifting extends the
   selection word by word (scrolling on near the page's edges); lifted without moving, the context
   menu opens on the word;
-- **two fingers**: pinch to zoom.
+- **two fingers**: pinch to zoom;
+- **in Read Mode**, a swipe sideways turns the page.
+
+Only egui decides when a touch held still is a long press (the shell asks it before taking a lift
+for a tap). A finger whose end got lost (lifted over the keyboard, outside the view) is dropped when
+the next finger lands alone on the screen.
 
 Scroll areas elsewhere (panes, dialogs, File, the ribbon) drag-scroll with a finger by themselves
 (egui's own touch scrolling). A mouse, trackpad or pen makes the input step aside
