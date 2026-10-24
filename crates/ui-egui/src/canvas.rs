@@ -127,13 +127,13 @@ pub struct CanvasState {
     /// Middle-click scrolling (#1065).
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
-    pub(crate) scroll_offset: egui::Vec2,
+    pub scroll_offset: egui::Vec2,
     scroll_max: egui::Vec2,
     /// Explicit page turn to apply on the next frame (reading navigation buttons/keys).
     scroll_request: Option<egui::Vec2>,
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
-    pub(crate) viewport: Option<egui::Rect>,
+    pub viewport: Option<egui::Rect>,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -1158,7 +1158,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     } else {
         app.canvas.auto_scroll.update(ui, area)
     };
-    let delta = wheel_delta + auto_delta + middle_delta;
+    // A finger dragging (or flinging) the page on a touch screen (`touch_gestures`).
+    let touch_delta = app.gestures.take_scroll(dt);
+    let delta = wheel_delta + auto_delta + middle_delta + touch_delta;
     let mut scroll_area = egui::ScrollArea::both()
         .id_salt("canvas_scroll")
         .auto_shrink([false, false])
@@ -1179,6 +1181,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         };
         if after == before && wheel_delta != egui::Vec2::ZERO {
             app.canvas.wheel.hit_edge();
+        }
+        if after == before && touch_delta != egui::Vec2::ZERO {
+            app.gestures.hit_edge();
         }
         if auto_delta != egui::Vec2::ZERO && after != before {
             // The scroll keeps going without new input.
@@ -1652,7 +1657,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     // A mouse or trackpad click on the page (no finger): on a touch screen, a keyboard is likely
     // there too, so the page takes the platform text input (`touch`).
-    if pointer_click && !ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. }))) {
+    if pointer_click && !app.gestures.finger() && !ui.input(|i| i.any_touches() || i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. }))) {
         crate::touch::note_keyboard(ui.ctx());
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));

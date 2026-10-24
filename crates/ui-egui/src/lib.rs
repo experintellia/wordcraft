@@ -83,6 +83,7 @@ pub mod table_resize;
 pub mod table_ruler;
 pub mod theme;
 pub mod touch;
+pub mod touch_gestures;
 pub mod widgets;
 pub mod window_close;
 pub mod window_geometry;
@@ -97,8 +98,7 @@ pub use control::ControlRequest;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
 pub(crate) use touch::text_zone;
 pub use touch::{
-    finger_events, keyboard_up, long_press_events, page_zones, set_keyboard_up, set_touch_screen, tap_opens_keyboard, tap_text_zone, text_zones,
-    touch_screen,
+    finger_events, keyboard_up, page_zones, set_keyboard_up, set_touch_screen, tap_opens_keyboard, tap_text_zone, text_zones, touch_screen,
 };
 
 /// Platform services injected by the host (file dialogs, file I/O).
@@ -584,6 +584,8 @@ pub struct WordApp {
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     pub(crate) synthetic: Vec<egui::Event>,
+    /// Finger gestures on the page on a touch screen.
+    pub(crate) gestures: touch_gestures::Gestures,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
@@ -723,6 +725,7 @@ impl WordApp {
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
+            gestures: Default::default(),
             control_click: false,
             keytip_rects: Vec::new(),
             nav_search_focus: false,
@@ -2246,6 +2249,10 @@ impl WordApp {
     /// Read a Control-click as the right-click on macOS, then inject synthetic input events from
     /// the control channel (one pointer event per frame).
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+        // A finger on the page: scrolls, taps, long-presses (`touch_gestures`).
+        if let Some(ctx) = self.ctx.clone().filter(touch::touch_screen) {
+            self.gestures.input(&ctx, raw, self.canvas.viewport);
+        }
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
