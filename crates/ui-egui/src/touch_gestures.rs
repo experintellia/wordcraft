@@ -4,8 +4,12 @@
 //!
 //! eframe (and the web shell for touches on its text input, `touch::finger_events`) reports a
 //! finger as a primary press and touch events. [`Gestures::input`] reads them in `raw_input_hook`
-//! before egui does: a single finger that lands on the page is held back from egui and replaced
-//! by what it turned into. Two fingers go to egui as touches (a pinch zooms). Anything else (a
+//! before egui does: a single finger that lands on the page has its pointer events held back from
+//! egui and replaced by what it turned into. Its touch events still reach egui (a single touch
+//! does nothing there, and eframe goes on reporting a finger egui has a touch for, wherever it
+//! moves), except during a long press, which egui follows as a pointer press instead (its own long
+//! touch would open the menu). Two fingers go to egui as touches (a pinch zooms). In Read Mode a
+//! swipe turns the page (`canvas`). Anything else (a
 //! mouse, a pen, a finger on the ribbon, a pane or a dialog, whose scroll areas drag-scroll by
 //! themselves) passes untouched.
 
@@ -92,6 +96,11 @@ impl Gestures {
         let (hold, ours) = (ctx.options(|o| o.input_options.max_click_duration), |p: Pos2| {
             page.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
         });
+        // A finger alone on the screen: a touch still followed lost its end (lifted where nothing
+        // reported it), and is done.
+        if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(ALONE))).unwrap_or(false) {
+            self.abandon(&mut raw.events);
+        }
         self.down_before = self.pointer_down;
         let mut out = self.queue.pop_front().unwrap_or_default();
         self.finger = !out.is_empty();
@@ -110,6 +119,8 @@ impl Gestures {
         if let Phase::Pending { id, start, at } = self.phase {
             if now - at >= hold {
                 self.phase = Phase::Hold { id, start, moved: false };
+                // egui follows it as a pointer press from now on: its touch ends.
+                out.push(touch_event(id, TouchPhase::Cancel, start));
                 self.click(&mut out, start, PointerButton::Primary);
                 self.later(vec![press(start, PointerButton::Primary, true)]);
             } else {
@@ -119,7 +130,27 @@ impl Gestures {
         if !self.queue.is_empty() || self.momentum.is_active() {
             ctx.request_repaint();
         }
+        let held = matches!(self.phase, Phase::Hold { .. });
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(HELD), held));
         raw.events = out;
+    }
+
+    /// Drops the gesture in progress, ending what egui was told of it ahead of `events`.
+    fn abandon(&mut self, events: &mut Vec<Event>) {
+        let ended = match self.phase {
+            Phase::Pending { id, start: at, .. } | Phase::Scroll { id, last: at } => vec![touch_event(id, TouchPhase::Cancel, at)],
+            Phase::Hold { start, .. } => vec![press(start, PointerButton::Primary, false), Event::PointerGone],
+            Phase::Idle | Phase::Multi { .. } | Phase::Pass { .. } => Vec::new(),
+        };
+        self.queue.clear();
+        self.momentum.cancel();
+        self.phase = Phase::Idle;
+        events.splice(0..0, ended);
+    }
+
+    /// The finger is dragging the page (a swipe, in Read Mode).
+    pub fn scrolling(&self) -> bool {
+        matches!(self.phase, Phase::Scroll { .. })
     }
 
     /// The scroll for this frame (`dt` seconds after the last): what the finger moved, or the fling
@@ -161,6 +192,7 @@ impl Gestures {
                 out.retain(|e| !matches!(e, Event::PointerButton { .. } | Event::PointerMoved(_) | Event::PointerGone));
                 self.pointer_down = false;
                 self.phase = Phase::Pending { id, start: pos, at: self.clock };
+                out.push(event);
             }
             (Phase::Idle, TouchPhase::Start) => {
                 self.phase = Phase::Pass { id };
@@ -176,10 +208,11 @@ impl Gestures {
                 Phase::Pending { id: first, start: at, .. } | Phase::Scroll { id: first, last: at } | Phase::Hold { id: first, start: at, .. },
                 TouchPhase::Start,
             ) => {
+                // egui has the first finger's touch, but for a long press's.
                 if let Phase::Hold { .. } = self.phase {
                     self.now_or_later(out, vec![press(at, PointerButton::Primary, false), Event::PointerGone]);
+                    out.push(touch_event(first, TouchPhase::Start, at));
                 }
-                out.push(Event::Touch { device_id: egui::TouchDeviceId(0), id: first, phase: TouchPhase::Start, pos: at, force: None });
                 out.push(event);
                 self.phase = Phase::Multi { fingers: 2 };
             }
@@ -193,6 +226,7 @@ impl Gestures {
             }
             (Phase::Multi { .. }, _) => out.push(event),
             (Phase::Pending { id: own, start, .. }, TouchPhase::Move) if own == id => {
+                out.push(event);
                 if (pos - start).length() > SLOP {
                     // Scrolling from where the finger landed, so the page stays under it.
                     self.scroll += pos - start;
@@ -200,14 +234,17 @@ impl Gestures {
                 }
             }
             (Phase::Pending { id: own, start, .. }, TouchPhase::End) if own == id => {
+                out.push(event);
                 self.phase = Phase::Idle;
                 self.click(out, start, PointerButton::Primary);
             }
             (Phase::Scroll { id: own, last }, TouchPhase::Move) if own == id => {
+                out.push(event);
                 self.scroll += pos - last;
                 self.phase = Phase::Scroll { id, last: pos };
             }
             (Phase::Scroll { id: own, .. }, TouchPhase::End) if own == id => {
+                out.push(event);
                 self.phase = Phase::Idle;
                 self.momentum.release();
             }
@@ -228,6 +265,7 @@ impl Gestures {
             }
             // A cancelled touch (the web shell's tap, which its text input takes) does nothing.
             (Phase::Pending { id: own, .. } | Phase::Scroll { id: own, .. }, TouchPhase::Cancel) if own == id => {
+                out.push(event);
                 self.phase = Phase::Idle;
                 self.momentum.cancel();
             }
@@ -257,6 +295,24 @@ impl Gestures {
         }
     }
 }
+
+/// Whether a long press holds the page (the web shell then takes the finger for no tap).
+pub fn long_pressed(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(egui::Id::new(HELD))).unwrap_or(false)
+}
+
+/// The web shell saw a finger land with no other on the screen: any gesture still in progress
+/// lost its end.
+pub fn finger_alone(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(ALONE), true));
+}
+
+fn touch_event(id: TouchId, phase: TouchPhase, pos: Pos2) -> Event {
+    Event::Touch { device_id: egui::TouchDeviceId(0), id, phase, pos, force: None }
+}
+
+const HELD: &str = "wordcraft.touch_held";
+const ALONE: &str = "wordcraft.touch_alone";
 
 fn press(pos: Pos2, button: PointerButton, pressed: bool) -> Event {
     Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE }
