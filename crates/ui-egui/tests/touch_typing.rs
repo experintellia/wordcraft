@@ -576,6 +576,23 @@ fn a_finger_on_the_ribbon_passes_through() {
 }
 
 #[test]
+fn a_finger_passing_through_whose_end_was_lost_leaves_the_page_to_scroll() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    // A finger on the ribbon presses egui's pointer, then its end is lost.
+    finger_id(&mut h, 1, TouchPhase::Start, egui::pos2(p.x, 40.0));
+    assert!(pressed(&h), "the finger passing through pressed the pointer");
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    step(&mut h);
+    assert!(!touches(&h) && !pressed(&h), "nothing of it is left in egui");
+    let before = h.state().canvas.scroll_offset.y;
+    drag_up(&mut h, 2, p, 100.0);
+    step(&mut h);
+    assert!(h.state().canvas.scroll_offset.y > before + 90.0, "the next finger on the page scrolls");
+    finger_id(&mut h, 2, TouchPhase::End, p);
+}
+
+#[test]
 fn a_cancelled_long_press_opens_no_menu() {
     let mut h = harness(true);
     let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
