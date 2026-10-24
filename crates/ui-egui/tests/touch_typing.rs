@@ -159,10 +159,8 @@ fn a_menu_open_leaves_the_page_to_dismiss_it() {
     let mut h = harness(true);
     let p = end_of_text(&mut h);
     assert!(wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, p));
-    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::Start, p));
-    h.step();
-    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::End, p));
-    h.run_steps(2);
+    long_press(&mut h, p);
+    lift(&mut h, p);
     assert!(h.state().canvas.context_menu_open);
     let (text, pages) = zones(&mut h);
     assert!(
@@ -246,36 +244,185 @@ fn a_mouse_click_on_the_page_takes_the_platform_text_input_a_finger_tap_does_not
     assert!(ime(&h), "a keyboard is likely there: the page asks for IME");
 }
 
-#[test]
-fn a_drag_on_the_page_still_selects() {
-    let mut h = harness(true);
-    let to = end_of_text(&mut h);
-    let from = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(2.0, 4.0);
-    let mid = from.lerp(to, 0.5);
-    for (phase, pos) in [
-        (TouchPhase::Start, from),
-        (TouchPhase::Move, from + egui::vec2(12.0, 0.0)),
-        (TouchPhase::Move, mid),
-        (TouchPhase::Move, to),
-        (TouchPhase::End, to),
-    ] {
-        h.input_mut().events.extend(wordcraft_ui_egui::finger_events(phase, TouchId(1), pos));
-        h.step();
+/// A finger's events at `pos`, as eframe sends them, and a frame.
+fn finger(h: &mut egui_kittest::Harness<'_, WordApp>, phase: TouchPhase, pos: Pos2) {
+    h.input_mut().events.extend(wordcraft_ui_egui::finger_events(phase, TouchId(1), pos));
+    step(h);
+}
+
+/// A finger held still at `p` until it's a long press.
+fn long_press(h: &mut egui_kittest::Harness<'_, WordApp>, p: Pos2) {
+    finger(h, TouchPhase::Start, p);
+    for _ in 0..60 {
+        step(h);
     }
-    h.step();
-    assert!(!h.state().session.sel.is_collapsed(), "the drag selected text");
-    assert!(!wordcraft_ui_egui::keyboard_up(&h.ctx), "and brought no keyboard up");
+}
+
+/// The finger lifts at `p`, and the frames after.
+fn lift(h: &mut egui_kittest::Harness<'_, WordApp>, p: Pos2) {
+    finger(h, TouchPhase::End, p);
+    for _ in 0..4 {
+        step(h);
+    }
+}
+
+/// A WordCraft window on a document taller than the window.
+fn long_document(touch: bool) -> egui_kittest::Harness<'static, WordApp> {
+    let text = (1..=300).map(|i| format!("Line {i} of the glaze notes.")).collect::<Vec<_>>().join("\n");
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text(&text)), Services::default());
+    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(egui::vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    wordcraft_ui_egui::set_touch_screen(&h.ctx, touch);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    h
+}
+
+fn page_middle(h: &egui_kittest::Harness<'_, WordApp>) -> Pos2 {
+    h.state().canvas.viewport.unwrap().center()
 }
 
 #[test]
-fn a_long_press_on_the_page_opens_the_context_menu() {
+fn a_finger_drag_scrolls_the_page_and_leaves_the_caret() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    let (caret_before, offset) = (caret(&h), h.state().canvas.scroll_offset);
+    finger(&mut h, TouchPhase::Start, p);
+    // Slowly, so it doesn't fling: the page follows the finger 1:1.
+    for i in 1..=40 {
+        finger(&mut h, TouchPhase::Move, p - egui::vec2(0.0, 5.0 * i as f32));
+    }
+    step(&mut h);
+    assert!((h.state().canvas.scroll_offset.y - offset.y - 200.0).abs() < 1.0, "{:?} -> {:?}", offset, h.state().canvas.scroll_offset);
+    lift(&mut h, p - egui::vec2(0.0, 200.0));
+    assert_eq!(caret(&h), caret_before, "the caret stays");
+    assert!(h.state().session.sel.is_collapsed(), "nothing selected");
+    assert!(!wordcraft_ui_egui::keyboard_up(&h.ctx) && !ime(&h), "and no keyboard");
+}
+
+#[test]
+fn a_finger_drag_scrolls_sideways_on_a_page_wider_than_the_window_and_keeps_the_keyboard() {
+    let mut h = long_document(true);
+    h.state_mut().run("view.zoom", json!({"value": 300})).unwrap();
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    wordcraft_ui_egui::set_keyboard_up(&h.ctx, true);
+    step(&mut h);
+    assert!(ime(&h));
+    let p = page_middle(&h);
+    let offset = h.state().canvas.scroll_offset;
+    finger(&mut h, TouchPhase::Start, p);
+    for i in 1..=20 {
+        finger(&mut h, TouchPhase::Move, p - egui::vec2(4.0 * i as f32, 2.0 * i as f32));
+    }
+    step(&mut h);
+    let now = h.state().canvas.scroll_offset;
+    assert!((now.x - offset.x - 80.0).abs() < 1.0 && (now.y - offset.y - 40.0).abs() < 1.0, "{offset:?} -> {now:?}");
+    assert!(wordcraft_ui_egui::keyboard_up(&h.ctx) && ime(&h), "the keyboard stays up while the page scrolls");
+    finger(&mut h, TouchPhase::Cancel, p);
+}
+
+#[test]
+fn a_fling_coasts_on_and_a_new_touch_stops_it() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    finger(&mut h, TouchPhase::Start, p);
+    for i in 1..=6 {
+        finger(&mut h, TouchPhase::Move, p - egui::vec2(0.0, 30.0 * i as f32));
+    }
+    finger(&mut h, TouchPhase::End, p - egui::vec2(0.0, 180.0));
+    let lifted = h.state().canvas.scroll_offset.y;
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    let coasted = h.state().canvas.scroll_offset.y;
+    assert!(coasted > lifted + 50.0, "the page coasts on after the finger lifts: {lifted} -> {coasted}");
+    finger(&mut h, TouchPhase::Start, p);
+    let stopped = h.state().canvas.scroll_offset.y;
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    assert!((h.state().canvas.scroll_offset.y - stopped).abs() < 0.5, "a touch stops the fling");
+    finger(&mut h, TouchPhase::Cancel, p);
+}
+
+#[test]
+fn a_finger_tap_on_the_page_places_the_caret() {
     let mut h = harness(true);
     let p = end_of_text(&mut h);
-    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::Start, p));
-    h.step();
-    h.input_mut().events.extend(wordcraft_ui_egui::long_press_events(TouchPhase::End, p));
-    h.run_steps(2);
+    let start = caret(&h);
+    finger(&mut h, TouchPhase::Start, p);
+    step(&mut h);
+    assert_eq!(caret(&h), start, "not on the press: it may turn into a scroll");
+    lift(&mut h, p);
+    assert_eq!(caret(&h).path, wordcraft_doc::Path(vec![2]), "the tap placed the caret");
+    assert!(h.state().session.sel.is_collapsed());
+}
+
+#[test]
+fn a_tap_the_text_input_takes_leaves_the_caret_to_it() {
+    let mut h = harness(true);
+    let p = end_of_text(&mut h);
+    let start = caret(&h);
+    // The web shell cancels a tap its text input takes (the focus then clicks the page).
+    finger(&mut h, TouchPhase::Start, p);
+    finger(&mut h, TouchPhase::Cancel, p);
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    assert_eq!(caret(&h), start);
+}
+
+#[test]
+fn a_long_press_selects_the_word_and_a_drag_extends_it() {
+    let mut h = harness(true);
+    let to = end_of_text(&mut h);
+    let from = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(&mut h, from);
+    let word = h.state().session.selected_text();
+    assert_eq!(word.trim(), "Kilns", "the word under the finger");
+    for i in 1..=10 {
+        finger(&mut h, TouchPhase::Move, from.lerp(to, i as f32 / 10.0));
+    }
+    lift(&mut h, to);
+    let text = h.state().session.selected_text();
+    assert!(text.starts_with("Kilns") && text.contains("noon"), "the drag extended it: {text:?}");
+    assert!(!h.state().canvas.context_menu_open, "no menu after a drag");
+}
+
+#[test]
+fn a_long_press_lifted_opens_the_context_menu_on_the_word() {
+    let mut h = harness(true);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(&mut h, p);
+    lift(&mut h, p);
     assert!(h.state().canvas.context_menu_open);
+    assert_eq!(h.state().session.selected_text().trim(), "Kilns", "the menu is for the word");
+}
+
+#[test]
+fn a_mouse_drag_still_selects_on_desktops() {
+    let mut h = harness(false);
+    let to = end_of_text(&mut h);
+    let from = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(2.0, 4.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.extend([egui::Event::PointerMoved(from), button(from, true)]);
+    step(&mut h);
+    for i in 1..=8 {
+        h.input_mut().events.push(egui::Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+        step(&mut h);
+    }
+    h.input_mut().events.push(button(to, false));
+    step(&mut h);
+    assert!(!h.state().session.sel.is_collapsed(), "the drag selected text");
 }
 
 #[test]
