@@ -19,6 +19,8 @@ use egui::{Event, PointerButton, Pos2, TouchId, TouchPhase, Vec2};
 
 /// How far (points) a finger may move and still tap or long-press.
 const SLOP: f32 = 8.0;
+/// Most fingers of a pinch followed.
+const MAX_FINGERS: usize = 10;
 /// Most frames of synthesised input waiting (a tap's release, a long press's clicks).
 const MAX_QUEUED: usize = 16;
 
@@ -42,13 +44,12 @@ enum Phase {
         start: Pos2,
         moved: bool,
     },
-    /// Two fingers or more (egui sees their touches); until the last lifts.
-    Multi {
-        fingers: u8,
-    },
+    /// Two fingers or more (egui sees their touches, `Gestures::pinch`); until the last lifts.
+    Multi,
     /// Not ours (a pen, a finger off the page): passes through until it lifts.
     Pass {
         id: TouchId,
+        at: Pos2,
     },
 }
 
@@ -70,6 +71,8 @@ pub struct Gestures {
     clock: f64,
     /// This frame's pointer input came from a finger.
     finger: bool,
+    /// The fingers of a pinch egui has touches for, and where they landed.
+    pinch: Vec<(TouchId, Pos2)>,
 }
 
 impl Default for Gestures {
@@ -83,6 +86,7 @@ impl Default for Gestures {
             down_before: false,
             clock: 0.0,
             finger: false,
+            pinch: Vec::new(),
         }
     }
 }
@@ -140,17 +144,26 @@ impl Gestures {
         let ended = match self.phase {
             Phase::Pending { id, start: at, .. } | Phase::Scroll { id, last: at } => vec![touch_event(id, TouchPhase::Cancel, at)],
             Phase::Hold { start, .. } => vec![press(start, PointerButton::Primary, false), Event::PointerGone],
-            Phase::Idle | Phase::Multi { .. } | Phase::Pass { .. } => Vec::new(),
+            Phase::Pass { id, at } => vec![touch_event(id, TouchPhase::Cancel, at)],
+            Phase::Multi => self.pinch.iter().map(|(id, at)| touch_event(*id, TouchPhase::Cancel, *at)).collect(),
+            Phase::Idle => Vec::new(),
         };
-        self.queue.clear();
+        // What was queued still goes to egui (a click's release), ahead of the ends.
+        let queued: Vec<Event> = self.queue.drain(..).flatten().collect();
+        self.pinch.clear();
         self.momentum.cancel();
         self.phase = Phase::Idle;
-        events.splice(0..0, ended);
+        events.splice(0..0, queued.into_iter().chain(ended));
     }
 
     /// The finger is dragging the page (a swipe, in Read Mode).
     pub fn scrolling(&self) -> bool {
         matches!(self.phase, Phase::Scroll { .. })
+    }
+
+    /// Two fingers or more are on the page (a pinch, which is no swipe).
+    pub fn pinching(&self) -> bool {
+        self.phase == Phase::Multi
     }
 
     /// The scroll for this frame (`dt` seconds after the last): what the finger moved, or the fling
@@ -178,7 +191,7 @@ impl Gestures {
 
     /// The finger's own pointer events (from eframe, or the web shell) don't reach egui.
     fn holds_pointer(&self) -> bool {
-        matches!(self.phase, Phase::Pending { .. } | Phase::Scroll { .. } | Phase::Hold { .. } | Phase::Multi { .. })
+        matches!(self.phase, Phase::Pending { .. } | Phase::Scroll { .. } | Phase::Hold { .. } | Phase::Multi)
     }
 
     fn touch(&mut self, out: &mut Vec<Event>, event: Event, id: TouchId, phase: TouchPhase, pos: Pos2, ours: &dyn Fn(Pos2) -> bool) {
@@ -195,10 +208,10 @@ impl Gestures {
                 out.push(event);
             }
             (Phase::Idle, TouchPhase::Start) => {
-                self.phase = Phase::Pass { id };
+                self.phase = Phase::Pass { id, at: pos };
                 out.push(event);
             }
-            (Phase::Pass { id: own }, TouchPhase::End | TouchPhase::Cancel) if own == id => {
+            (Phase::Pass { id: own, .. }, TouchPhase::End | TouchPhase::Cancel) if own == id => {
                 self.phase = Phase::Idle;
                 out.push(event);
             }
@@ -214,17 +227,24 @@ impl Gestures {
                     out.push(touch_event(first, TouchPhase::Start, at));
                 }
                 out.push(event);
-                self.phase = Phase::Multi { fingers: 2 };
+                self.scroll = Vec2::ZERO;
+                self.pinch = vec![(first, at), (id, pos)];
+                self.phase = Phase::Multi;
             }
-            (Phase::Multi { fingers }, TouchPhase::Start) => {
-                self.phase = Phase::Multi { fingers: fingers.saturating_add(1) };
+            (Phase::Multi, TouchPhase::Start) => {
+                if self.pinch.len() < MAX_FINGERS {
+                    self.pinch.push((id, pos));
+                }
                 out.push(event);
             }
-            (Phase::Multi { fingers }, TouchPhase::End | TouchPhase::Cancel) => {
-                self.phase = if fingers <= 1 { Phase::Idle } else { Phase::Multi { fingers: fingers - 1 } };
+            (Phase::Multi, TouchPhase::End | TouchPhase::Cancel) => {
+                self.pinch.retain(|(own, _)| *own != id);
+                if self.pinch.is_empty() {
+                    self.phase = Phase::Idle;
+                }
                 out.push(event);
             }
-            (Phase::Multi { .. }, _) => out.push(event),
+            (Phase::Multi, _) => out.push(event),
             (Phase::Pending { id: own, start, .. }, TouchPhase::Move) if own == id => {
                 out.push(event);
                 if (pos - start).length() > SLOP {

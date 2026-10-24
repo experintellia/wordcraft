@@ -439,10 +439,14 @@ fn drag_up(h: &mut egui_kittest::Harness<'_, WordApp>, id: u64, p: Pos2, by: f32
 fn a_finger_whose_end_was_lost_doesnt_lock_the_page() {
     let mut h = long_document(true);
     let p = page_middle(&h);
-    // A drag whose end nobody reported (lifted over the keyboard, outside the view).
+    // A drag whose end nobody reported (lifted over the keyboard, outside the view). egui has its
+    // touch all along, so eframe goes on reporting the finger wherever it is.
     drag_up(&mut h, 1, p, 100.0);
-    // The web shell then sees a finger land alone on the screen.
+    assert!(touches(&h), "egui follows the scrolling finger's touch");
+    // The web shell then sees a finger land alone on the screen: the lost one is dropped.
     wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    step(&mut h);
+    assert!(!touches(&h) && !pressed(&h), "nothing of it is left in egui");
     let before = h.state().canvas.scroll_offset.y;
     drag_up(&mut h, 2, p, 100.0);
     step(&mut h);
@@ -462,6 +466,76 @@ fn a_finger_whose_end_was_lost_doesnt_lock_the_page() {
     h.input_mut().events.push(click(at, false));
     step(&mut h);
     assert_ne!(caret(&h), start, "the mouse click placed the caret");
+}
+
+fn touches(h: &egui_kittest::Harness<'_, WordApp>) -> bool {
+    h.ctx.input(|i| i.any_touches())
+}
+
+fn pressed(h: &egui_kittest::Harness<'_, WordApp>) -> bool {
+    h.ctx.input(|i| i.pointer.any_down())
+}
+
+#[test]
+fn a_long_press_is_a_pointer_press_for_egui_not_a_touch() {
+    let mut h = harness(true);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(&mut h, p);
+    assert!(!touches(&h), "egui's own long touch would open the menu");
+    assert!(pressed(&h), "the word is held, to drag it on");
+    // Its end lost, and a finger landing alone later drops it.
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    step(&mut h);
+    step(&mut h);
+    assert!(!touches(&h) && !pressed(&h));
+}
+
+#[test]
+fn a_finger_landing_right_after_a_tap_leaves_no_button_pressed() {
+    let mut h = harness(true);
+    let p = end_of_text(&mut h);
+    finger(&mut h, TouchPhase::Start, p);
+    // The tap's release is queued for the next frame; a finger lands alone before it.
+    finger(&mut h, TouchPhase::End, p);
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    assert!(!pressed(&h), "the release still reached egui");
+    assert_eq!(caret(&h).path, wordcraft_doc::Path(vec![2]), "and the tap placed the caret");
+}
+
+#[test]
+fn a_finger_landing_right_after_a_long_press_leaves_no_button_pressed() {
+    let mut h = harness(true);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(&mut h, p);
+    finger(&mut h, TouchPhase::End, p);
+    step(&mut h);
+    // The menu's secondary click is still queued when a finger lands alone.
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    for _ in 0..3 {
+        step(&mut h);
+    }
+    assert!(!pressed(&h) && !touches(&h));
+}
+
+#[test]
+fn a_pinch_whose_ends_were_lost_leaves_no_touches() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    finger_id(&mut h, 1, TouchPhase::Start, p);
+    finger_id(&mut h, 2, TouchPhase::Start, p + egui::vec2(100.0, 0.0));
+    assert!(touches(&h));
+    // The app went to the background: no ends. A finger lands alone afterwards.
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    step(&mut h);
+    assert!(!touches(&h), "no phantom fingers left");
+    let before = h.state().canvas.scroll_offset.y;
+    drag_up(&mut h, 3, p, 100.0);
+    step(&mut h);
+    assert!(h.state().canvas.scroll_offset.y > before + 90.0, "one finger scrolls");
+    finger_id(&mut h, 3, TouchPhase::End, p);
 }
 
 #[test]
@@ -566,6 +640,18 @@ fn a_swipe_turns_the_page_in_read_mode() {
         step(&mut h);
     }
     assert!((h.state().canvas.scroll_offset.x - before).abs() < 1.0, "and back");
+    // A drag that turns into a pinch turns no page.
+    finger_id(&mut h, 1, TouchPhase::Start, p);
+    for i in 1..=8 {
+        finger_id(&mut h, 1, TouchPhase::Move, p - egui::vec2(10.0 * i as f32, 0.0));
+    }
+    finger_id(&mut h, 2, TouchPhase::Start, p + egui::vec2(60.0, 40.0));
+    finger_id(&mut h, 2, TouchPhase::End, p + egui::vec2(60.0, 40.0));
+    finger_id(&mut h, 1, TouchPhase::End, p - egui::vec2(80.0, 0.0));
+    for _ in 0..60 {
+        step(&mut h);
+    }
+    assert!((h.state().canvas.scroll_offset.x - before).abs() < 1.0, "a pinch is no swipe");
 }
 
 #[test]
