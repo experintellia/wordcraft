@@ -44,6 +44,12 @@ I-beam pointer shows on white paper on Windows").
 - **Malformed or hostile edits from other members are refused.** An edit, or a shared update,
   that crashed the app is skipped on that device from then on.
 
+### Touch screens
+- **A tap opens the on-screen keyboard** on iOS and Android, on the page (where it places the caret)
+  and in every text field: dialogs, the font box, Find, comments and Options.
+- **Drags select, a long press opens the context menu, and pinching zooms.**
+- **A mouse, trackpad, pen or hardware keyboard** on a tablet works as on a desktop.
+
 ### Phone width
 - Below 600 pt the app keeps what fits:
   - no rulers;
@@ -67,5 +73,6 @@ I-beam pointer shows on white paper on Windows").
   a later edit of it by its author can miss. Every member still ends up with the same document.
 - **The log isn't append-only:** a modified app could remove other members' edits from the
   chat's log.
+- **One finger can't scroll the page yet:** a drag selects text. Scroll with the scroll bars.
 - **A second pane on a phone** (say, Comments while Navigation is open) gets almost no width
   until the first one is closed.
