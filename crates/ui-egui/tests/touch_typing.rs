@@ -848,6 +848,40 @@ fn a_finger_on_the_scroll_bar_drags_it() {
 }
 
 #[test]
+fn a_tap_by_the_edges_of_the_view_places_a_caret() {
+    let mut h = long_document(true);
+    let view = h.state().canvas.viewport.unwrap();
+    let (text, _) = zones(&mut h);
+    // The vertical scroll bar's strip is the bar's: the web shell's input leaves it.
+    let bar = egui::pos2(view.right() - 4.0, view.center().y);
+    assert!(!text.iter().any(|z| z.contains(bar)), "the input leaves the scroll bar");
+    // No horizontal bar: the bottom edge is the page's, and its tap is the input's.
+    let bottom = egui::pos2(view.center().x, view.bottom() - 4.0);
+    assert!(text.iter().any(|z| z.contains(bottom)), "the input covers the page down to the bottom");
+    finger(&mut h, TouchPhase::Start, bottom);
+    finger(&mut h, TouchPhase::Cancel, bottom);
+    assert!(wordcraft_ui_egui::tap_text_zone(&h.ctx, bottom).is_some());
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    assert!(h.state().session.sel.is_collapsed(), "one click: a caret, not a word");
+}
+
+#[test]
+fn a_finger_passing_through_lifted_in_the_frame_a_page_finger_lands_releases_the_pointer() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    let ribbon = egui::pos2(p.x, 40.0);
+    finger_id(&mut h, 1, TouchPhase::Start, ribbon);
+    assert!(pressed(&h));
+    h.input_mut().events.extend(wordcraft_ui_egui::finger_events(TouchPhase::End, TouchId(1), ribbon));
+    h.input_mut().events.extend(wordcraft_ui_egui::finger_events(TouchPhase::Start, TouchId(2), p));
+    step(&mut h);
+    assert!(!pressed(&h), "the ribbon finger's release reached egui");
+    finger_id(&mut h, 2, TouchPhase::Cancel, p);
+}
+
+#[test]
 fn desktops_are_unchanged() {
     let mut h = harness(false);
     assert!(ime(&h), "the focused page asks for IME at the caret");

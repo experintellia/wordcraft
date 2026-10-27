@@ -19,9 +19,6 @@ use egui::{Event, PointerButton, Pos2, TouchId, TouchPhase, Vec2};
 
 /// How far (points) a finger may move and still tap or long-press (the web shell uses it too).
 pub const SLOP: f32 = 8.0;
-/// The strip (points) along the page view's right and bottom edges where its scroll bars float: a
-/// finger there drags them, as before.
-const SCROLL_BAR_EDGE: f32 = 16.0;
 /// Most fingers of a pinch followed.
 const MAX_FINGERS: usize = 10;
 /// Most frames of synthesised input waiting (a tap's release, a long press's clicks).
@@ -103,8 +100,7 @@ impl Gestures {
         // Pens (an iPad's Pencil also sends touches) select as with a mouse.
         let stylus: Vec<TouchId> = ctx.data_mut(|d| d.remove_temp::<Vec<TouchId>>(egui::Id::new(STYLUS))).unwrap_or_default();
         let (hold, ours) = (ctx.options(|o| o.input_options.max_click_duration), |p: Pos2| {
-            let view = page.map(|r| egui::Rect::from_min_max(r.min, r.max - Vec2::splat(SCROLL_BAR_EDGE)));
-            view.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+            page.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
         });
         // Nothing takes a fling while the page isn't shown (File, the Start screen).
         if page.is_none() {
@@ -124,10 +120,17 @@ impl Gestures {
                     self.phase = Phase::Pass { id, at: pos };
                     out.push(event);
                 }
-                Event::Touch { id, phase, pos, .. } => self.touch(&mut out, &mut pointer_at, event.clone(), id, phase, pos, &ours),
+                Event::Touch { id, phase, pos, .. } => {
+                    self.touch(&mut out, &mut pointer_at, event.clone(), id, phase, pos, &ours);
+                    // Pointer events before another finger's touch are that finger's.
+                    pointer_at.clear();
+                }
                 Event::PointerButton { .. } | Event::PointerMoved(_) | Event::PointerGone if self.holds_pointer() => {}
                 Event::PointerButton { button: PointerButton::Primary, pressed, .. } => {
                     self.pointer_down = pressed;
+                    // Released (a finger passing through lifted): a finger landing after it in
+                    // this frame isn't a pen's.
+                    self.down_before &= pressed;
                     pointer_at.push(out.len());
                     out.push(event);
                 }
