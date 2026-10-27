@@ -198,7 +198,9 @@ fn placed_zones(ctx: &egui::Context) -> Vec<Zone> {
             continue;
         }
         let holes = over(r, z.layer);
-        if z.page && popup {
+        // Text fields beside it too, so the tap only dismisses it; a field inside a popup (its own
+        // search box) still takes taps.
+        if popup && (z.page || z.layer.order < egui::Order::Foreground) {
             continue;
         }
         if z.page {

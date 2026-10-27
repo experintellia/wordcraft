@@ -6,7 +6,7 @@ edits the same document. Tags are `v<upstream version>-webxdc.<n>`; each release
 section here (`.github/workflows/release-webxdc.yml`). Upstream WordCraft's own progress is in
 [ROADMAP.md](ROADMAP.md).
 
-## v0.9.0-webxdc.1 — 2026-10-22
+## v0.9.0-webxdc.1 — unreleased
 
 The first release. It is based on upstream WordCraft 0.9.0 and later (`main` at `2451b5a`, "The
 I-beam pointer shows on white paper on Windows").
@@ -17,7 +17,8 @@ I-beam pointer shows on white paper on Windows").
 - In a chat the app holds one document:
   - **Bringing a file in:** File › Replace with File… and Insert › Pictures pick files through
     the messenger.
-  - **Sending a copy out:** Save As and Export (Word, PDF, …) send it to the chat.
+  - **Sending a copy out:** Save As and Export (Word, PDF, …) send it to the chat. Export's Print
+    Markup box puts comments and tracked changes in it.
   - **Left out, because a chat can't do them:** New, Open, Save, Print, Close, Recover, recent
     files, AutoSave and the Start screen.
 - The author of comments and tracked changes is your chat name.
@@ -46,7 +47,7 @@ I-beam pointer shows on white paper on Windows").
 
 ### Touch screens
 - **A tap opens the on-screen keyboard** on iOS and Android, on the page (where it places the caret)
-  and in every text field: dialogs, the font box, Find, comments and Options.
+  and in text fields: dialogs, the font box, Find, comments and Options.
 - **Drags select, a long press opens the context menu, and pinching zooms.**
 - **A mouse, trackpad, pen or hardware keyboard** on a tablet works as on a desktop.
 
@@ -55,7 +56,8 @@ I-beam pointer shows on white paper on Windows").
   - no rulers;
   - a compact title bar and status bar;
   - ribbon tabs that fit, with Share, Editing and Comments as icons;
-  - dialogs and File's pages that stay on screen and scroll;
+  - dialogs and File's pages that stay on screen and scroll, with Options' panes as a menu and
+    Export's buttons fitting the width;
   - panes over the page.
 - The page starts fitted to the screen's width.
 
@@ -66,6 +68,8 @@ I-beam pointer shows on white paper on Windows").
   paragraph. Every member still ends up with the same document.
 - **WebP and TIFF pictures** can't be inserted, and ones inside an opened document don't show.
 - **Undoing an automatic capital** doesn't add an AutoCorrect exception in a chat.
+- **Number boxes** (spacing, indents and margins in Paragraph, Page Setup and Options) may not open
+  the on-screen keyboard on iOS; their arrows still work.
 - **Add Font…** and **Load System Installed Fonts…** still show in the font box, and only report
   that they aren't available.
 - **Comments and parts created at the same time:** when one member deletes a comment (or a header,

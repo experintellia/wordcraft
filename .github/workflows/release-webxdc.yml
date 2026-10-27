@@ -1,8 +1,9 @@
 # Builds the webxdc app (packaging/webxdc/package.sh) and attaches it to a GitHub Release as
 # `wordcraft.xdc`. Fork releases are tagged `v<upstream version>-webxdc.<n>` (plain `v0.9.0` is
 # upstream's tag): pushing such a tag, or creating a release with it, releases under that tag; a
-# manual run takes the tag as input. The release notes are that tag's section of CHANGELOG.md. An
-# existing release gets its wordcraft.xdc replaced.
+# manual run takes the tag as input. A release's notes are the tag's section of CHANGELOG.md, also
+# for one created in the GitHub UI with empty notes. An existing release gets its wordcraft.xdc
+# replaced, built from the tag's own commit.
 name: Release webxdc
 
 on:
@@ -60,12 +61,22 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then TAG="$GITHUB_REF_NAME"; else TAG="$INPUT_TAG"; fi
           case "$TAG" in v*-webxdc.*) ;; *) echo "::error::tag $TAG isn't v<version>-webxdc.<n>"; exit 1 ;; esac
+          # A tag that exists already names its commit: a manual run from a later webxdc would attach
+          # a different build to it.
+          if TAGGED=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha 2>/dev/null) && [ "$TAGGED" != "$GITHUB_SHA" ]; then
+            echo "::error::tag $TAG is at $TAGGED, not this run's $GITHUB_SHA: push the tag again, or use a new one"
+            exit 1
+          fi
+          # The tag's section of CHANGELOG.md, without its heading.
+          awk -v tag="$TAG" '/^## /{p = ($2 == tag); next} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "WordCraft as a webxdc app: send wordcraft.xdc to a Delta Chat chat; everyone who opens it edits the same document." > notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" wordcraft.xdc --clobber
+            # Made in the GitHub UI with no notes: the changelog's.
+            if [ -z "$(gh release view "$TAG" --json body -q .body)" ]; then
+              gh release edit "$TAG" --notes-file notes.md
+            fi
           else
-            # The tag's section of CHANGELOG.md, without its heading.
-            awk -v tag="$TAG" '/^## /{p = ($2 == tag); next} p' CHANGELOG.md > notes.md
-            [ -s notes.md ] || echo "WordCraft as a webxdc app: send wordcraft.xdc to a Delta Chat chat; everyone who opens it edits the same document." > notes.md
             gh release create "$TAG" wordcraft.xdc --target "$GITHUB_SHA" \
               --title "WordCraft $TAG (webxdc)" --notes-file notes.md
           fi

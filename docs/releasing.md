@@ -4,9 +4,10 @@
 > native release workflows (`release.yml`, `windows-arm64.yml`, `freebsd.yml`) are removed here.
 > `.github/workflows/release-webxdc.yml` builds `packaging/webxdc/package.sh` and attaches
 > `wordcraft.xdc` to a GitHub Release. Fork tags are `v<upstream version>-webxdc.<n>` (plain
-> `v0.9.0` is upstream's tag). To release: add the tag's section to [`CHANGELOG.md`](../CHANGELOG.md)
-> on `webxdc`, then run the workflow by hand on `webxdc` with the tag (or push the tag); the
-> release notes are that section. Every pull request gets a preview `wordcraft.xdc`
+> `v0.9.0` is upstream's tag). To release: give the tag's section of [`CHANGELOG.md`](../CHANGELOG.md)
+> its date on `webxdc` (`## v0.9.0-webxdc.1 — 2026-10-30`), then run the workflow by hand on
+> `webxdc` with the tag, push the tag, or create the release in the GitHub UI with empty notes;
+> the release notes are that section. A tag that exists already releases only from its own commit. Every pull request gets a preview `wordcraft.xdc`
 > (`.github/workflows/webxdc-preview.yml`). The rest of this page describes upstream's native
 > pipeline.
 
