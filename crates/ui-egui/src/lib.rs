@@ -2252,7 +2252,7 @@ impl WordApp {
         // A finger on the page: scrolls, taps, long-presses (`touch_gestures`).
         if let Some(ctx) = self.ctx.clone().filter(touch::touch_screen) {
             // Only a page drawn last frame: File and the Start screen take their own fingers.
-            self.gestures.input(&ctx, raw, self.canvas.viewport.filter(|_| self.canvas.shown));
+            self.gestures.input(&ctx, raw, self.canvas.finger_view.filter(|_| self.canvas.shown));
         }
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);

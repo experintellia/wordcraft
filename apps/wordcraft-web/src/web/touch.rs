@@ -65,8 +65,7 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
         }
         // A pen (an iPad's Pencil) selects as with a mouse: egui is told it's no finger.
         for t in (0..e.changed_touches().length()).filter_map(|i| e.changed_touches().get(i)) {
-            let kind = js_sys::Reflect::get(&t, &wasm_bindgen::JsValue::from_str("touchType")).ok().and_then(|v| v.as_string());
-            if kind.as_deref() == Some("stylus") {
+            if is_stylus(&t) {
                 wordcraft_ui_egui::touch_gestures::stylus(&start_ctx, t.identifier().into());
             }
         }
@@ -78,7 +77,8 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
     let on_end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |e: web_sys::TouchEvent| {
         // One finger, lifted near where it went down: a tap, not a drag, a pinch or a long press
         // (egui's `touch_gestures` decides that one).
-        let Some(t) = e.changed_touches().get(0).filter(|_| e.touches().length() == 0 && !e.default_prevented()) else { return };
+        // (Not a pen's, which selects as with a mouse.)
+        let Some(t) = e.changed_touches().get(0).filter(|t| e.touches().length() == 0 && !e.default_prevented() && !is_stylus(t)) else { return };
         let (x, y, multi) = start.get();
         if multi || wordcraft_ui_egui::touch_gestures::long_pressed(&end_ctx) || moved(&end_ctx, (x, y), (t.client_x(), t.client_y())) {
             return;
@@ -156,6 +156,11 @@ struct Forwarded {
     /// egui has its touch: from the start on a page (whose fingers egui follows); on a text field
     /// only once it's no tap (a drag, as eframe would report it).
     sent: bool,
+}
+
+/// A pen's touch (Safari's `touchType` "stylus", an iPad's Pencil).
+fn is_stylus(t: &web_sys::Touch) -> bool {
+    js_sys::Reflect::get(t, &wasm_bindgen::JsValue::from_str("touchType")).ok().and_then(|v| v.as_string()).as_deref() == Some("stylus")
 }
 
 /// Whether a finger moved from `a` to `b` (CSS pixels) farther than a tap may: egui's measure
@@ -253,6 +258,14 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
                 return;
             }
             if let Some(t) = e.changed_touches().get(0) {
+                // A pen that landed on the input before it stood aside: egui gets it as eframe
+                // reports a pen, and the input no focus (no tap, no keyboard).
+                if is_stylus(&t) {
+                    send(finger(egui::TouchPhase::Start, &t));
+                    *followed = Some(Forwarded { ids: vec![t.identifier()], x: t.client_x(), y: t.client_y(), tap: false, sent: true });
+                    e.prevent_default();
+                    return;
+                }
                 let page = wordcraft_ui_egui::tap_opens_keyboard(&ctx, at(t.client_x(), t.client_y()));
                 if page {
                     send(finger(egui::TouchPhase::Start, &t));

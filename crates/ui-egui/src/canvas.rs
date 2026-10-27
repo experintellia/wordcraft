@@ -29,6 +29,8 @@ const EDGE_MARGIN: f32 = 32.0;
 /// Auto-scroll speed (points/s) at the margin's inner boundary and at (or past) the edge.
 const EDGE_SPEED_MIN: f32 = 45.0;
 const EDGE_SPEED_MAX: f32 = 720.0;
+/// The strip (points) along the page view's edges where its floating scroll bars take a finger.
+const SCROLL_BAR_EDGE: f32 = 16.0;
 /// How far (points) a finger swipes sideways in Read Mode to turn the page.
 const READ_SWIPE: f32 = 40.0;
 /// Longest gap (s) and distance (points) between a finger's two taps of a double tap.
@@ -57,6 +59,9 @@ pub struct CanvasState {
     pub(crate) nav_to_caret: bool,
     /// Touchpad travel not yet converted to an entire reading-column turn.
     read_wheel_accum: f32,
+    /// The page view less the strips where its scroll bars float, at the end of last frame:
+    /// where a finger is the page's (a finger on a scroll bar drags it, as eframe reports it).
+    pub(crate) finger_view: Option<Rect>,
     /// The page was drawn this frame (not File, nor the Start screen): fingers there are the page's.
     pub(crate) shown: bool,
     /// How far a finger has swiped the page in Read Mode (touch screens), to turn it when it lifts.
@@ -237,6 +242,7 @@ impl Default for CanvasState {
             read_wheel_accum: 0.0,
             read_swipe: egui::Vec2::ZERO,
             shown: false,
+            finger_view: None,
             read_viewport: Settle::default(),
             web_viewport: Settle::default(),
             read_force_reflow: false,
@@ -1650,11 +1656,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // the scroll area is built, so it reads last frame's viewport.
     app.canvas.viewport = Some(out.inner_rect);
     let (resp, rects) = out.inner;
+    // The scroll bars float along the view's right (and bottom) edge while there is somewhere to
+    // scroll: fingers there are theirs, and the web shell's text input leaves them.
+    let bars = if app.session.view.read_mode {
+        egui::Vec2::ZERO
+    } else {
+        vec2(if app.canvas.scroll_max.y > 0.0 { SCROLL_BAR_EDGE } else { 0.0 }, if app.canvas.scroll_max.x > 0.0 { SCROLL_BAR_EDGE } else { 0.0 })
+    };
+    let finger_view = Rect::from_min_max(out.inner_rect.min, out.inner_rect.max - bars);
+    app.canvas.finger_view = Some(finger_view);
     // On a touch screen a tap on the visible pages types there (`touch`); not in Read Mode, nor
     // while a pen owns the pointer.
     if !app.session.view.read_mode && app.session.view.draw.mode == wordcraft_engine::cmd::draw::DrawMode::Select {
         for r in &rects {
-            crate::touch::page_zone(ui.ctx(), r.intersect(out.inner_rect), ui.layer_id());
+            crate::touch::page_zone(ui.ctx(), r.intersect(finger_view), ui.layer_id());
         }
     }
     // A click on the page leaves the selected comment balloon.

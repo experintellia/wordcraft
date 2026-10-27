@@ -142,8 +142,9 @@ for a tap). A finger whose end got lost (lifted over the keyboard, outside the v
 the next finger lands alone on the screen.
 
 Scroll areas elsewhere (panes, dialogs, File, the ribbon) get the finger as eframe reports it and
-drag-scroll by themselves (egui's own touch scrolling), and so does the page's scroll bar (a strip
-along the view's right and bottom edges). Known limit: a finger drag on a picture's handles or a
+drag-scroll by themselves (egui's own touch scrolling), and so do the page's scroll bars (a strip
+along the view's right edge, and its bottom one when the page is wider than the view: the text
+input leaves them). Known limit: a finger drag on a picture's handles or a
 table border scrolls the page; a mouse or pen still drags them. A pen (Safari's `touchType`
 "stylus") selects like a mouse. A mouse, trackpad or pen makes the input step aside
 (`pointer-events: none`) until a finger touches the screen again, so wheel, hover and strokes reach
