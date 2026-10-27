@@ -2251,7 +2251,8 @@ impl WordApp {
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
         // A finger on the page: scrolls, taps, long-presses (`touch_gestures`).
         if let Some(ctx) = self.ctx.clone().filter(touch::touch_screen) {
-            self.gestures.input(&ctx, raw, self.canvas.viewport);
+            // Only a page drawn last frame: File and the Start screen take their own fingers.
+            self.gestures.input(&ctx, raw, self.canvas.viewport.filter(|_| self.canvas.shown));
         }
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
@@ -2285,6 +2286,7 @@ impl WordApp {
         let ctx = ui.ctx().clone();
         // A tap on the web shell's text input over a page or a text field (`touch`): a click on
         // the page there, or the field takes the keyboard (within the pass, so it sees the focus).
+        self.canvas.shown = false;
         match touch::begin_pass(&ctx) {
             Some(touch::Tap::Page(p)) => {
                 self.canvas.want_focus = true;

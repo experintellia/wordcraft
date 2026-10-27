@@ -17,8 +17,11 @@ use std::collections::VecDeque;
 
 use egui::{Event, PointerButton, Pos2, TouchId, TouchPhase, Vec2};
 
-/// How far (points) a finger may move and still tap or long-press.
-const SLOP: f32 = 8.0;
+/// How far (points) a finger may move and still tap or long-press (the web shell uses it too).
+pub const SLOP: f32 = 8.0;
+/// The strip (points) along the page view's right and bottom edges where its scroll bars float: a
+/// finger there drags them, as before.
+const SCROLL_BAR_EDGE: f32 = 16.0;
 /// Most fingers of a pinch followed.
 const MAX_FINGERS: usize = 10;
 /// Most frames of synthesised input waiting (a tap's release, a long press's clicks).
@@ -97,23 +100,39 @@ impl Gestures {
     pub fn input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput, page: Option<egui::Rect>) {
         let now = raw.time.unwrap_or(self.clock + f64::from(raw.predicted_dt));
         self.clock = now;
+        // Pens (an iPad's Pencil also sends touches) select as with a mouse.
+        let stylus: Vec<TouchId> = ctx.data_mut(|d| d.remove_temp::<Vec<TouchId>>(egui::Id::new(STYLUS))).unwrap_or_default();
         let (hold, ours) = (ctx.options(|o| o.input_options.max_click_duration), |p: Pos2| {
-            page.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+            let view = page.map(|r| egui::Rect::from_min_max(r.min, r.max - Vec2::splat(SCROLL_BAR_EDGE)));
+            view.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
         });
+        // Nothing takes a fling while the page isn't shown (File, the Start screen).
+        if page.is_none() {
+            self.momentum.cancel();
+        }
         // A finger alone on the screen: a touch still followed lost its end (lifted where nothing
         // reported it), and is done.
-        if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(ALONE))).unwrap_or(false) {
-            self.abandon(&mut raw.events);
-        }
+        let alone = ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(ALONE))).unwrap_or(false);
+        let mut out = if alone { self.abandon() } else { self.queue.pop_front().unwrap_or_default() };
         self.down_before = self.pointer_down;
-        let mut out = self.queue.pop_front().unwrap_or_default();
         self.finger = !out.is_empty();
+        // Where this frame's own pointer events went in `out`: a finger's comes just before its touch.
+        let mut pointer_at = Vec::new();
         for event in std::mem::take(&mut raw.events) {
             match event {
-                Event::Touch { id, phase, pos, .. } => self.touch(&mut out, event.clone(), id, phase, pos, &ours),
+                Event::Touch { id, phase, pos, .. } if phase == TouchPhase::Start && stylus.contains(&id) && self.phase == Phase::Idle => {
+                    self.phase = Phase::Pass { id, at: pos };
+                    out.push(event);
+                }
+                Event::Touch { id, phase, pos, .. } => self.touch(&mut out, &mut pointer_at, event.clone(), id, phase, pos, &ours),
                 Event::PointerButton { .. } | Event::PointerMoved(_) | Event::PointerGone if self.holds_pointer() => {}
                 Event::PointerButton { button: PointerButton::Primary, pressed, .. } => {
                     self.pointer_down = pressed;
+                    pointer_at.push(out.len());
+                    out.push(event);
+                }
+                Event::PointerButton { .. } | Event::PointerMoved(_) | Event::PointerGone => {
+                    pointer_at.push(out.len());
                     out.push(event);
                 }
                 _ => out.push(event),
@@ -131,7 +150,8 @@ impl Gestures {
                 ctx.request_repaint_after(std::time::Duration::from_secs_f64((hold - (now - at)).clamp(0.0, 10.0)));
             }
         }
-        if !self.queue.is_empty() || self.momentum.is_active() {
+        // A coast goes on by itself; a finger resting on the page sends its own events.
+        if !self.queue.is_empty() || (self.momentum.is_active() && !self.scrolling() && page.is_some()) {
             ctx.request_repaint();
         }
         let held = matches!(self.phase, Phase::Hold { .. });
@@ -139,8 +159,8 @@ impl Gestures {
         raw.events = out;
     }
 
-    /// Drops the gesture in progress, ending what egui was told of it ahead of `events`.
-    fn abandon(&mut self, events: &mut Vec<Event>) {
+    /// Drops the gesture in progress; returns the input that ends what egui was told of it.
+    fn abandon(&mut self) -> Vec<Event> {
         let ended = match self.phase {
             Phase::Pending { id, start: at, .. } | Phase::Scroll { id, last: at } => vec![touch_event(id, TouchPhase::Cancel, at)],
             Phase::Hold { start, .. } => vec![press(start, PointerButton::Primary, false), Event::PointerGone],
@@ -161,7 +181,7 @@ impl Gestures {
         self.pinch.clear();
         self.momentum.cancel();
         self.phase = Phase::Idle;
-        events.splice(0..0, queued.into_iter().chain(ended));
+        queued.into_iter().chain(ended).collect()
     }
 
     /// The finger is dragging the page (a swipe, in Read Mode).
@@ -202,15 +222,30 @@ impl Gestures {
         matches!(self.phase, Phase::Pending { .. } | Phase::Scroll { .. } | Phase::Hold { .. } | Phase::Multi)
     }
 
-    fn touch(&mut self, out: &mut Vec<Event>, event: Event, id: TouchId, phase: TouchPhase, pos: Pos2, ours: &dyn Fn(Pos2) -> bool) {
+    #[allow(clippy::too_many_arguments)]
+    fn touch(
+        &mut self,
+        out: &mut Vec<Event>,
+        pointer_at: &mut Vec<usize>,
+        event: Event,
+        id: TouchId,
+        phase: TouchPhase,
+        pos: Pos2,
+        ours: &dyn Fn(Pos2) -> bool,
+    ) {
         if phase == TouchPhase::Start {
             // A new touch stops a fling.
             self.momentum.cancel();
         }
         match (self.phase, phase) {
             (Phase::Idle, TouchPhase::Start) if !self.down_before && ours(pos) => {
-                // The finger's press may have come just before its touch, in this frame.
-                out.retain(|e| !matches!(e, Event::PointerButton { .. } | Event::PointerMoved(_) | Event::PointerGone));
+                // The finger's press may have come just before its touch, in this frame (only that:
+                // not the input that ends a gesture dropped this frame, nor a queued release).
+                for at in pointer_at.drain(..).rev() {
+                    if at < out.len() {
+                        out.remove(at);
+                    }
+                }
                 self.pointer_down = false;
                 self.phase = Phase::Pending { id, start: pos, at: self.clock };
                 out.push(event);
@@ -238,21 +273,30 @@ impl Gestures {
                 self.scroll = Vec2::ZERO;
                 self.pinch = vec![(first, at), (id, pos)];
                 self.phase = Phase::Multi;
+                self.point_at_pinch(out);
             }
             (Phase::Multi, TouchPhase::Start) => {
                 if self.pinch.len() < MAX_FINGERS {
                     self.pinch.push((id, pos));
                 }
                 out.push(event);
+                self.point_at_pinch(out);
             }
             (Phase::Multi, TouchPhase::End | TouchPhase::Cancel) => {
                 self.pinch.retain(|(own, _)| *own != id);
+                out.push(event);
                 if self.pinch.is_empty() {
                     self.phase = Phase::Idle;
+                    self.now_or_later(out, vec![Event::PointerGone]);
+                }
+            }
+            (Phase::Multi, _) => {
+                if let Some(finger) = self.pinch.iter_mut().find(|(own, _)| *own == id) {
+                    finger.1 = pos;
                 }
                 out.push(event);
+                self.point_at_pinch(out);
             }
-            (Phase::Multi, _) => out.push(event),
             (Phase::Pending { id: own, start, .. }, TouchPhase::Move) if own == id => {
                 out.push(event);
                 if (pos - start).length() > SLOP {
@@ -301,6 +345,14 @@ impl Gestures {
         }
     }
 
+    /// The pointer between the pinch's fingers: the page zooms only under the pointer, and keeps
+    /// the point there in place (the fingers' own pointer events are held back).
+    fn point_at_pinch(&mut self, out: &mut Vec<Event>) {
+        let n = self.pinch.len().max(1) as f32;
+        let centre = self.pinch.iter().fold(Vec2::ZERO, |sum, (_, at)| sum + at.to_vec2()) / n;
+        self.now_or_later(out, vec![Event::PointerMoved(centre.to_pos2())]);
+    }
+
     /// A press now and its release next frame (the page sees one click per frame).
     fn click(&mut self, out: &mut Vec<Event>, at: Pos2, button: PointerButton) {
         self.now_or_later(out, vec![Event::PointerMoved(at), press(at, button, true)]);
@@ -339,6 +391,12 @@ fn touch_event(id: TouchId, phase: TouchPhase, pos: Pos2) -> Event {
     Event::Touch { device_id: egui::TouchDeviceId(0), id, phase, pos, force: None }
 }
 
+/// The web shell saw these touches start from a pen (Safari's `touchType` "stylus").
+pub fn stylus(ctx: &egui::Context, id: TouchId) {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<TouchId>>(egui::Id::new(STYLUS)).push(id));
+}
+
+const STYLUS: &str = "wordcraft.touch_stylus";
 const HELD: &str = "wordcraft.touch_held";
 const ALONE: &str = "wordcraft.touch_alone";
 

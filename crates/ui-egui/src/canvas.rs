@@ -57,6 +57,8 @@ pub struct CanvasState {
     pub(crate) nav_to_caret: bool,
     /// Touchpad travel not yet converted to an entire reading-column turn.
     read_wheel_accum: f32,
+    /// The page was drawn this frame (not File, nor the Start screen): fingers there are the page's.
+    pub(crate) shown: bool,
     /// How far a finger has swiped the page in Read Mode (touch screens), to turn it when it lifts.
     read_swipe: egui::Vec2,
     /// Last actual viewport seen during a resize, distinct from the committed reading page size.
@@ -234,6 +236,7 @@ impl Default for CanvasState {
             nav_to_caret: false,
             read_wheel_accum: 0.0,
             read_swipe: egui::Vec2::ZERO,
+            shown: false,
             read_viewport: Settle::default(),
             web_viewport: Settle::default(),
             read_force_reflow: false,
@@ -1007,6 +1010,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         area
     };
     app.canvas.canvas_rect = Some(area);
+    app.canvas.shown = true;
     // Ctrl/⌘ + wheel (and trackpad pinch) zooms the document, like Word. egui reports both as a
     // zoom factor and doesn't scroll for them. Start from the shown scale so fit modes zoom too.
     // With animation effects off the wheel zooms in whole steps, each at once.

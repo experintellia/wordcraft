@@ -444,8 +444,8 @@ fn a_finger_whose_end_was_lost_doesnt_lock_the_page() {
     drag_up(&mut h, 1, p, 100.0);
     assert!(touches(&h), "egui follows the scrolling finger's touch");
     // The web shell then sees a finger land alone on the screen: the lost one is dropped.
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
-    step(&mut h);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     assert!(!touches(&h) && !pressed(&h), "nothing of it is left in egui");
     let before = h.state().canvas.scroll_offset.y;
     drag_up(&mut h, 2, p, 100.0);
@@ -468,6 +468,17 @@ fn a_finger_whose_end_was_lost_doesnt_lock_the_page() {
     assert_ne!(caret(&h), start, "the mouse click placed the caret");
 }
 
+/// Where a later finger lands, on the page.
+const LANDING: Pos2 = egui::pos2(600.0, 500.0);
+
+/// A finger lands alone on the screen: the web shell tells egui (`finger_alone`) in the frame of
+/// the finger's own touchstart.
+fn land_alone(h: &mut egui_kittest::Harness<'_, WordApp>, id: u64, pos: Pos2) {
+    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    h.input_mut().events.extend(wordcraft_ui_egui::finger_events(TouchPhase::Start, TouchId(id), pos));
+    step(h);
+}
+
 fn touches(h: &egui_kittest::Harness<'_, WordApp>) -> bool {
     h.ctx.input(|i| i.any_touches())
 }
@@ -484,8 +495,8 @@ fn a_long_press_is_a_pointer_press_for_egui_not_a_touch() {
     assert!(!touches(&h), "egui's own long touch would open the menu");
     assert!(pressed(&h), "the word is held, to drag it on");
     // Its end lost, and a finger landing alone later drops it.
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
-    step(&mut h);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     step(&mut h);
     assert!(!touches(&h) && !pressed(&h));
 }
@@ -497,7 +508,8 @@ fn a_finger_landing_right_after_a_tap_leaves_no_button_pressed() {
     finger(&mut h, TouchPhase::Start, p);
     // The tap's release is queued for the next frame; a finger lands alone before it.
     finger(&mut h, TouchPhase::End, p);
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     for _ in 0..3 {
         step(&mut h);
     }
@@ -513,7 +525,8 @@ fn a_finger_landing_right_after_a_long_press_leaves_no_button_pressed() {
     finger(&mut h, TouchPhase::End, p);
     step(&mut h);
     // The menu's secondary click is still queued when a finger lands alone.
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     for _ in 0..3 {
         step(&mut h);
     }
@@ -528,8 +541,8 @@ fn a_pinch_whose_ends_were_lost_leaves_no_touches() {
     finger_id(&mut h, 2, TouchPhase::Start, p + egui::vec2(100.0, 0.0));
     assert!(touches(&h));
     // The app went to the background: no ends. A finger lands alone afterwards.
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
-    step(&mut h);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     assert!(!touches(&h), "no phantom fingers left");
     let before = h.state().canvas.scroll_offset.y;
     drag_up(&mut h, 3, p, 100.0);
@@ -579,8 +592,8 @@ fn a_finger_passing_through_whose_end_was_lost_leaves_the_page_to_scroll() {
     // A finger on the ribbon presses egui's pointer, then its end is lost.
     finger_id(&mut h, 1, TouchPhase::Start, egui::pos2(p.x, 40.0));
     assert!(pressed(&h), "the finger passing through pressed the pointer");
-    wordcraft_ui_egui::touch_gestures::finger_alone(&h.ctx);
-    step(&mut h);
+    land_alone(&mut h, 9, LANDING);
+    finger_id(&mut h, 9, TouchPhase::Cancel, LANDING);
     assert!(!touches(&h) && !pressed(&h), "nothing of it is left in egui");
     let before = h.state().canvas.scroll_offset.y;
     drag_up(&mut h, 2, p, 100.0);
@@ -669,6 +682,169 @@ fn a_swipe_turns_the_page_in_read_mode() {
         step(&mut h);
     }
     assert!((h.state().canvas.scroll_offset.x - before).abs() < 1.0, "a pinch is no swipe");
+}
+
+/// A phone-sized window on a document of `lines` lines, fitted to the page's width as the web
+/// shell starts it on a phone.
+fn phone(lines: usize) -> egui_kittest::Harness<'static, WordApp> {
+    let text = (1..=lines).map(|i| format!("Line {i} of the glaze notes.")).collect::<Vec<_>>().join("\n");
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text(&text)), Services::default());
+    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(egui::vec2(390.0, 844.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    wordcraft_ui_egui::set_touch_screen(&h.ctx, true);
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    h.state_mut().run("view.pageWidth", json!({})).unwrap();
+    for _ in 0..6 {
+        step(&mut h);
+    }
+    h
+}
+
+/// Two fingers land at `a` and `b` and spread apart; returns the zoom factor it made.
+fn pinch(h: &mut egui_kittest::Harness<'_, WordApp>, a: Pos2, b: Pos2) -> f32 {
+    let before = h.state().canvas.scale;
+    let away = (b - a).normalized() * 6.0;
+    finger_id(h, 11, TouchPhase::Start, a);
+    finger_id(h, 12, TouchPhase::Start, b);
+    for i in 1..=10 {
+        let k = i as f32;
+        h.input_mut().events.extend(wordcraft_ui_egui::finger_events(TouchPhase::Move, TouchId(11), a - away * k));
+        h.input_mut().events.extend(wordcraft_ui_egui::finger_events(TouchPhase::Move, TouchId(12), b + away * k));
+        step(h);
+    }
+    finger_id(h, 12, TouchPhase::End, b + away * 10.0);
+    finger_id(h, 11, TouchPhase::End, a - away * 10.0);
+    for _ in 0..4 {
+        step(h);
+    }
+    h.state().canvas.scale / before
+}
+
+/// On a page, and below the last one (grey canvas), in a fitted one-page document.
+fn page_and_below(h: &egui_kittest::Harness<'_, WordApp>) -> (Pos2, Pos2) {
+    let page = h.state().canvas.page_rects[0];
+    let view = h.state().canvas.viewport.unwrap();
+    let on = egui::pos2(view.center().x, (page.top().max(view.top()) + 120.0).min(view.bottom() - 200.0));
+    let below = egui::pos2(view.center().x, (page.bottom() + 40.0).min(view.bottom() - 20.0));
+    (on, below)
+}
+
+#[test]
+fn a_pinch_zooms_a_one_page_document_wherever_the_fingers_land() {
+    for (what, order) in [("page, then below it", 0), ("below it, then the page", 1), ("both below it", 2), ("both on the page", 3)] {
+        let mut h = phone(12);
+        let (on, below) = page_and_below(&h);
+        let page = h.state().canvas.page_rects[0];
+        assert!(h.state().canvas.page_rects.len() == 1 && below.y > page.bottom() && page.contains(on), "{page:?} {on:?} {below:?}");
+        let (a, b) = match order {
+            0 => (on, below),
+            1 => (below, on),
+            2 => (below - egui::vec2(60.0, 0.0), below + egui::vec2(60.0, 0.0)),
+            _ => (on - egui::vec2(0.0, 50.0), on + egui::vec2(0.0, 50.0)),
+        };
+        let zoom = pinch(&mut h, a, b);
+        assert!(zoom > 1.2, "{what}: the pinch zoomed {zoom}");
+    }
+}
+
+#[test]
+fn a_pinch_zooms_a_two_page_document_too() {
+    let mut h = phone(120);
+    let (on, _) = page_and_below(&h);
+    let zoom = pinch(&mut h, on - egui::vec2(0.0, 50.0), on + egui::vec2(0.0, 50.0));
+    assert!(zoom > 1.2, "the pinch zoomed {zoom}");
+}
+
+#[test]
+fn a_pinch_zooms_with_the_keyboard_up_and_down() {
+    for up in [false, true] {
+        let mut h = phone(12);
+        wordcraft_ui_egui::set_keyboard_up(&h.ctx, up);
+        step(&mut h);
+        let (on, below) = page_and_below(&h);
+        let zoom = pinch(&mut h, on, below);
+        assert!(zoom > 1.2, "keyboard up: {up}: the pinch zoomed {zoom}");
+        assert_eq!(wordcraft_ui_egui::keyboard_up(&h.ctx), up);
+    }
+}
+
+#[test]
+fn a_finger_on_file_is_files_own() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    let offset = h.state().canvas.scroll_offset;
+    h.state_mut().run("ui.tab", json!({"tab": "File"})).unwrap();
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    finger_id(&mut h, 1, TouchPhase::Start, p);
+    assert!(pressed(&h), "egui gets the finger as eframe reports it (File's lists drag-scroll by themselves)");
+    for i in 1..=10 {
+        finger_id(&mut h, 1, TouchPhase::Move, p - egui::vec2(0.0, 10.0 * i as f32));
+    }
+    finger_id(&mut h, 1, TouchPhase::End, p - egui::vec2(0.0, 100.0));
+    h.state_mut().run("ui.tab", json!({"tab": "Home"})).unwrap();
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    assert_eq!(h.state().canvas.scroll_offset, offset, "the page behind File didn't scroll");
+}
+
+#[test]
+fn a_fling_stops_when_file_opens() {
+    let mut h = long_document(true);
+    let p = page_middle(&h);
+    finger(&mut h, TouchPhase::Start, p);
+    for i in 1..=6 {
+        finger(&mut h, TouchPhase::Move, p - egui::vec2(0.0, 30.0 * i as f32));
+    }
+    finger(&mut h, TouchPhase::End, p - egui::vec2(0.0, 180.0));
+    h.state_mut().run("ui.tab", json!({"tab": "File"})).unwrap();
+    step(&mut h);
+    step(&mut h);
+    let at_file = h.state().canvas.scroll_offset;
+    for _ in 0..10 {
+        step(&mut h);
+    }
+    h.state_mut().run("ui.tab", json!({"tab": "Home"})).unwrap();
+    for _ in 0..4 {
+        step(&mut h);
+    }
+    assert!((h.state().canvas.scroll_offset - at_file).length() < 0.5, "no coast left for when the page comes back");
+}
+
+#[test]
+fn a_pen_selects_as_with_a_mouse() {
+    let mut h = harness(true);
+    let to = end_of_text(&mut h);
+    let from = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(2.0, 4.0);
+    // The web shell saw Safari's touchType "stylus".
+    wordcraft_ui_egui::touch_gestures::stylus(&h.ctx, TouchId(4));
+    finger_id(&mut h, 4, TouchPhase::Start, from);
+    for i in 1..=8 {
+        finger_id(&mut h, 4, TouchPhase::Move, from.lerp(to, i as f32 / 8.0));
+    }
+    finger_id(&mut h, 4, TouchPhase::End, to);
+    step(&mut h);
+    assert!(!h.state().session.sel.is_collapsed(), "the pen selected text");
+}
+
+#[test]
+fn a_finger_on_the_scroll_bar_drags_it() {
+    let mut h = long_document(true);
+    let view = h.state().canvas.viewport.unwrap();
+    let bar = egui::pos2(view.right() - 4.0, view.top() + 60.0);
+    finger_id(&mut h, 1, TouchPhase::Start, bar);
+    assert!(pressed(&h), "the finger reaches the scroll bar as eframe reports it");
+    finger_id(&mut h, 1, TouchPhase::Cancel, bar);
 }
 
 #[test]
