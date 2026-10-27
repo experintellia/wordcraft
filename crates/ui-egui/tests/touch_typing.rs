@@ -165,10 +165,7 @@ fn a_menu_open_leaves_the_page_to_dismiss_it() {
     h.run_steps(2);
     assert!(h.state().canvas.context_menu_open);
     let (text, pages) = zones(&mut h);
-    assert!(
-        pages.is_empty() && text.iter().all(|z| z.bottom() < p.y - 40.0),
-        "a tap on the page beside the menu only dismisses it (the ribbon's boxes still type): {text:?}"
-    );
+    assert!(pages.is_empty() && text.is_empty(), "a tap beside the menu (the page, the ribbon's boxes) only dismisses it: {text:?}");
     assert!(!wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, p), "nor opens the keyboard from the canvas");
     assert_eq!(wordcraft_ui_egui::tap_text_zone(&h.ctx, p), None);
 }
