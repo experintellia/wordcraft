@@ -63,6 +63,13 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
         if e.touches().length() == 1 {
             wordcraft_ui_egui::touch_gestures::finger_alone(&start_ctx);
         }
+        // A pen (an iPad's Pencil) selects as with a mouse: egui is told it's no finger.
+        for t in (0..e.changed_touches().length()).filter_map(|i| e.changed_touches().get(i)) {
+            let kind = js_sys::Reflect::get(&t, &wasm_bindgen::JsValue::from_str("touchType")).ok().and_then(|v| v.as_string());
+            if kind.as_deref() == Some("stylus") {
+                wordcraft_ui_egui::touch_gestures::stylus(&start_ctx, t.identifier().into());
+            }
+        }
         if let Some(t) = e.changed_touches().get(0) {
             start_set.set((t.client_x(), t.client_y(), e.touches().length() > 1));
         }
@@ -73,11 +80,7 @@ fn keyboard_on_tap(ctx: &egui::Context, canvas_id: &'static str) {
         // (egui's `touch_gestures` decides that one).
         let Some(t) = e.changed_touches().get(0).filter(|_| e.touches().length() == 0 && !e.default_prevented()) else { return };
         let (x, y, multi) = start.get();
-        if multi
-            || wordcraft_ui_egui::touch_gestures::long_pressed(&end_ctx)
-            || (t.client_x() - x).abs() > TAP_SLOP
-            || (t.client_y() - y).abs() > TAP_SLOP
-        {
+        if multi || wordcraft_ui_egui::touch_gestures::long_pressed(&end_ctx) || moved(&end_ctx, (x, y), (t.client_x(), t.client_y())) {
             return;
         }
         let Some((canvas, input)) = canvas_and_input(canvas_id) else { return };
@@ -155,8 +158,12 @@ struct Forwarded {
     sent: bool,
 }
 
-/// How far (CSS pixels) a tap may move: farther, it's a drag.
-const TAP_SLOP: i32 = 10;
+/// Whether a finger moved from `a` to `b` (CSS pixels) farther than a tap may: egui's measure
+/// (`touch_gestures::SLOP`, in points), so both sides tell a tap from a drag alike.
+fn moved(ctx: &egui::Context, a: (i32, i32), b: (i32, i32)) -> bool {
+    let (dx, dy) = (f64::from(b.0) - f64::from(a.0), f64::from(b.1) - f64::from(a.1));
+    (dx.hypot(dy) as f32) / ctx.zoom_factor().max(0.01) > wordcraft_ui_egui::touch_gestures::SLOP
+}
 
 /// Touches that begin on the text input go to egui as eframe sends a finger on the canvas
 /// (`wordcraft_ui_egui::finger_events`): on a page from the start, where `touch_gestures` makes
@@ -255,13 +262,13 @@ fn forward_gestures(ctx: &egui::Context, canvas_id: &'static str, events: &Gestu
         }
     });
     let on_move = Closure::<dyn FnMut(web_sys::TouchEvent)>::new({
-        let (touch, send, finger, at) = (touch.clone(), send.clone(), finger.clone(), at.clone());
+        let (touch, send, finger, at, ctx) = (touch.clone(), send.clone(), finger.clone(), at.clone(), ctx.clone());
         move |e: web_sys::TouchEvent| {
             let mut followed = touch.borrow_mut();
             let Some(f) = followed.as_mut() else { return };
             let ours: Vec<web_sys::Touch> = changed(&e).into_iter().filter(|t| f.ids.contains(&t.identifier())).collect();
             for t in ours {
-                if f.tap && ((t.client_x() - f.x).abs() > TAP_SLOP || (t.client_y() - f.y).abs() > TAP_SLOP) {
+                if f.tap && moved(&ctx, (f.x, f.y), (t.client_x(), t.client_y())) {
                     f.tap = false;
                 }
                 // A drag from a text field: egui gets it from where it began.

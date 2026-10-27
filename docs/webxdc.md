@@ -141,8 +141,11 @@ Only egui decides when a touch held still is a long press (the shell asks it bef
 for a tap). A finger whose end got lost (lifted over the keyboard, outside the view) is dropped when
 the next finger lands alone on the screen.
 
-Scroll areas elsewhere (panes, dialogs, File, the ribbon) drag-scroll with a finger by themselves
-(egui's own touch scrolling). A mouse, trackpad or pen makes the input step aside
+Scroll areas elsewhere (panes, dialogs, File, the ribbon) get the finger as eframe reports it and
+drag-scroll by themselves (egui's own touch scrolling), and so does the page's scroll bar (a strip
+along the view's right and bottom edges). Known limit: a finger drag on a picture's handles or a
+table border scrolls the page; a mouse or pen still drags them. A pen (Safari's `touchType`
+"stylus") selects like a mouse. A mouse, trackpad or pen makes the input step aside
 (`pointer-events: none`) until a finger touches the screen again, so wheel, hover and strokes reach
 the page, and they select as on a desktop. While the keyboard is up the input follows the caret and
 taps reach the page as usual. Until a tap, a key typed or a mouse click on the page, the page asks for
