@@ -940,6 +940,8 @@ fn a_mini_toolbar_button_brings_no_keyboard_up_while_it_is_down() {
     assert!(!wordcraft_ui_egui::keyboard_up(&h.ctx));
 }
 
+/// A guard: the ribbon kept the keyboard up before (its clicks leave the page focused); the mini
+/// toolbar test above is the one the fix makes pass.
 #[test]
 fn a_ribbon_button_keeps_the_keyboard_up_while_it_is_up() {
     let mut h = harness(true);
