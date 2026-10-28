@@ -6,7 +6,7 @@ edits the same document. Tags are `v<upstream version>-webxdc.<n>`; each release
 section here (`.github/workflows/release-webxdc.yml`). Upstream WordCraft's own progress is in
 [ROADMAP.md](ROADMAP.md).
 
-## v0.9.0-webxdc.1 — unreleased
+## v0.9.0-webxdc.1 — 2026-10-28
 
 The first release. It is based on upstream WordCraft 0.9.0 and later (`main` at `2451b5a`, "The
 I-beam pointer shows on white paper on Windows").
@@ -47,7 +47,8 @@ I-beam pointer shows on white paper on Windows").
 
 ### Touch screens
 - **A tap opens the on-screen keyboard** on iOS and Android, on the page (where it places the caret)
-  and in text fields: dialogs, the font box, Find, comments and Options.
+  and in text fields: dialogs, the font box, Find, comments and Options. Formatting from the
+  toolbar or the ribbon while typing keeps the keyboard up.
 - **A finger drag scrolls the page,** up, down and sideways, and coasts on after a flick; a new
   touch stops it. Scrolling never moves the caret.
 - **A double tap selects a word; a long press selects the word under the finger,** and dragging on
