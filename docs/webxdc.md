@@ -119,8 +119,8 @@ hidden input from script a frame later. On touch screens (`pointer: coarse`) the
 (`apps/wordcraft-web/src/web/touch.rs`, ported from GridCraft's) lays eframe's transparent input
 over the visible pages and every text field (dialogs, the ribbon's boxes, the Navigation pane,
 comments, File, Options: `crates/ui-egui/src/touch.rs`), with holes where a window or the mini
-toolbar lies over a page, and over no page while a menu or popup is open (a tap beside it only
-dismisses it). A tap there focuses it natively, the keyboard comes up, and the next frames place the
+toolbar lies over a page, and over no page or field beside an open menu or popup (a tap beside it
+only dismisses it; a field inside a popup still types). A tap there focuses it natively, the keyboard comes up, and the next frames place the
 caret where the page was tapped or focus the field. A tap on a page that reaches the canvas instead
 (the first after a mouse) focuses the input from the touch handler.
 

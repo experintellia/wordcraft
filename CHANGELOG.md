@@ -48,7 +48,12 @@ I-beam pointer shows on white paper on Windows").
 ### Touch screens
 - **A tap opens the on-screen keyboard** on iOS and Android, on the page (where it places the caret)
   and in text fields: dialogs, the font box, Find, comments and Options.
-- **Drags select, a long press opens the context menu, and pinching zooms.**
+- **A finger drag scrolls the page,** up, down and sideways, and coasts on after a flick; a new
+  touch stops it. Scrolling never moves the caret.
+- **A double tap selects a word; a long press selects the word under the finger,** and dragging on
+  extends the selection. Lifted without moving, a long press opens the context menu.
+- **Pinching zooms; in Read Mode a sideways swipe turns the page.** Panes, dialogs and File's pages
+  scroll with a finger too.
 - **A mouse, trackpad, pen or hardware keyboard** on a tablet works as on a desktop.
 
 ### Phone width
@@ -77,6 +82,7 @@ I-beam pointer shows on white paper on Windows").
   a later edit of it by its author can miss. Every member still ends up with the same document.
 - **The log isn't append-only:** a modified app could remove other members' edits from the
   chat's log.
-- **One finger can't scroll the page yet:** a drag selects text. Scroll with the scroll bars.
+- **A finger drag on a picture's handles or a table border** scrolls the page; a mouse or pen still
+  drags them.
 - **A second pane on a phone** (say, Comments while Navigation is open) gets almost no width
   until the first one is closed.
