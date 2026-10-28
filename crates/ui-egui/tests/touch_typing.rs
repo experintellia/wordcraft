@@ -891,3 +891,70 @@ fn desktops_are_unchanged() {
     h.run_steps(3);
     assert!(zones(&mut h).0.is_empty());
 }
+
+/// Selects text with a long press and a drag, then taps the mini toolbar's Bold with a finger (as
+/// eframe reports a finger on the canvas: the toolbar is a hole in the web shell's input). Returns
+/// whether each frame asked for the platform text input (the on-screen keyboard), from the tap on.
+fn bold_from_the_mini_toolbar(h: &mut egui_kittest::Harness<'_, WordApp>) -> Vec<bool> {
+    let to = end_of_text(h);
+    let p = canvas::caret_screen(h.state_mut()).unwrap().0 + egui::vec2(12.0, 6.0);
+    long_press(h, p);
+    for i in 1..=10 {
+        finger(h, TouchPhase::Move, p.lerp(to, i as f32 / 10.0));
+    }
+    lift(h, to);
+    let bar: [egui::Rect; 2] = h.ctx.data(|d| d.get_temp(wordcraft_ui_egui::mini_toolbar::shown_id())).expect("the mini toolbar shows");
+    let bold = {
+        use egui_kittest::kittest::Queryable;
+        h.query_all_by_label("Bold").map(|n| n.rect().center()).find(|c| bar[0].contains(*c)).expect("Bold on the mini toolbar")
+    };
+    assert!(!zones(h).0.iter().any(|z| z.contains(bold)) && !wordcraft_ui_egui::tap_opens_keyboard(&h.ctx, bold));
+    let mut asked = Vec::new();
+    finger_id(h, 7, TouchPhase::Start, bold);
+    asked.push(ime(h));
+    finger_id(h, 7, TouchPhase::End, bold);
+    for _ in 0..6 {
+        asked.push(ime(h));
+        step(h);
+    }
+    let bold_now = h.state_mut().session.run("format.state", &json!({})).unwrap_or_default()["bold"].as_bool();
+    assert_eq!(bold_now, Some(true), "the button applied bold");
+    asked
+}
+
+#[test]
+fn a_mini_toolbar_button_keeps_the_keyboard_up_while_it_is_up() {
+    let mut h = harness(true);
+    wordcraft_ui_egui::set_keyboard_up(&h.ctx, true);
+    step(&mut h);
+    let asked = bold_from_the_mini_toolbar(&mut h);
+    assert!(asked.iter().all(|a| *a), "no frame without the keyboard (eframe would put it down): {asked:?}");
+    assert!(wordcraft_ui_egui::keyboard_up(&h.ctx));
+}
+
+#[test]
+fn a_mini_toolbar_button_brings_no_keyboard_up_while_it_is_down() {
+    let mut h = harness(true);
+    let asked = bold_from_the_mini_toolbar(&mut h);
+    assert!(asked.iter().all(|a| !*a), "no frame asks for the keyboard: {asked:?}");
+    assert!(!wordcraft_ui_egui::keyboard_up(&h.ctx));
+}
+
+#[test]
+fn a_ribbon_button_keeps_the_keyboard_up_while_it_is_up() {
+    let mut h = harness(true);
+    wordcraft_ui_egui::set_keyboard_up(&h.ctx, true);
+    step(&mut h);
+    let italic = {
+        use egui_kittest::kittest::Queryable;
+        h.query_all_by_label("Italic").map(|n| n.rect().center()).find(|c| c.y < 200.0).expect("Italic on the ribbon")
+    };
+    let mut asked = Vec::new();
+    finger_id(&mut h, 8, TouchPhase::Start, italic);
+    finger_id(&mut h, 8, TouchPhase::End, italic);
+    for _ in 0..6 {
+        asked.push(ime(&h));
+        step(&mut h);
+    }
+    assert!(asked.iter().all(|a| *a), "{asked:?}");
+}

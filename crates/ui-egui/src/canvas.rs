@@ -1523,7 +1523,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let focused = resp.has_focus() || app.canvas.focused;
         // The platform text input (IME, the on-screen keyboard) follows the caret; on a touch
         // screen only once a tap on the page brought the keyboard up (`touch`).
-        let takes_typing = focused && crate::touch::page_takes_typing(ui.ctx());
+        // Also while the page is being handed the keyboard back (`want_focus`, after a toolbar or
+        // ribbon button): egui dropped its focus for the click, and a frame without the request
+        // made eframe blur its text input, which put the on-screen keyboard down (iOS).
+        let takes_typing = (focused || app.canvas.want_focus) && crate::touch::page_takes_typing(ui.ctx());
         // After an automatic change, the web's text agent starts afresh (`keys::note_automatic_change`).
         // Only there: on X11 an interrupt recreates the input context and fcitx drops later keys (#1169).
         let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && cfg!(target_arch = "wasm32") && app.canvas.ime_preedit.is_empty();
